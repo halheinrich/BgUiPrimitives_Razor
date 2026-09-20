@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <!-- Framework, nullable, implicit usings, warnings-as-errors, and doc-file
+       generation are repo-wide policy — see ..\Directory.Build.props. Only
+       per-project decisions live here: the Razor SDK (project attribute above)
+       and the browser SupportedPlatform.
+
+       This library references no other umbrella member, by design: it sits
+       below every Razor member and both hosts, and a primitive that knew about
+       filters, quizzes, diagrams or XG would not be one. -->
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" />
+  </ItemGroup>
+
+</Project>

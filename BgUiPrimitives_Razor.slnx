@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="BgUiPrimitives_Razor.Tests/BgUiPrimitives_Razor.Tests.csproj" />
+  <Project Path="BgUiPrimitives_Razor/BgUiPrimitives_Razor.csproj" />
+</Solution>
