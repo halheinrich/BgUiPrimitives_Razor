@@ -1,0 +1,24 @@
+/* Only what Bootstrap lacks. Bootstrap styles the box and its close button;
+   it has no notion of the whole box being a click target.
+
+   The dismissible box is the target, so it shows the pointer cursor. */
+.alert-dismissible {
+    cursor: pointer;
+}
+
+/* The content wrapper stops a click that originates inside it from reaching
+   the box (Notice.razor) — that is what keeps a link or button in a notice
+   from dismissing it. Taken alone that would shrink the target to the box's
+   padding, so the wrapper and its plain content are made transparent to the
+   pointer: a click on them lands on the box itself and dismisses. */
+.alert-dismissible > .bg-notice-content {
+    pointer-events: none;
+}
+
+/* Interactive content takes the pointer back, so its clicks originate inside
+   the wrapper and never dismiss. An element made interactive without being
+   one natively needs a tabindex to be keyboard-reachable at all, and that
+   same attribute is what puts it on this list. */
+.alert-dismissible > .bg-notice-content ::deep :is(a, button, input, select, textarea, label, summary, [tabindex]) {
+    pointer-events: auto;
+}
