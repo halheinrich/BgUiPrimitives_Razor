@@ -26,6 +26,15 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The library's project file, linked (not copied into source control)
+         and staged beside the test assembly, so the trim-posture pin reads the
+         file the library is actually built from. Moving or renaming it breaks
+         this build rather than a test at runtime. -->
+    <None Include="..\BgUiPrimitives_Razor\BgUiPrimitives_Razor.csproj"
+          Link="TrimPosture\BgUiPrimitives_Razor.csproj" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Using Include="Xunit" />
   </ItemGroup>
 

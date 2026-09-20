@@ -2,8 +2,8 @@
 
   <!-- Framework, nullable, implicit usings, warnings-as-errors, and doc-file
        generation are repo-wide policy — see ..\Directory.Build.props. Only
-       per-project decisions live here: the Razor SDK (project attribute above)
-       and the browser SupportedPlatform.
+       per-project decisions live here: the Razor SDK (project attribute above),
+       the browser SupportedPlatform, and the trim posture below.
 
        This library references no other umbrella member, by design: it sits
        below every Razor member and both hosts, and a primitive that knew about
@@ -12,6 +12,20 @@
   <ItemGroup>
     <SupportedPlatform Include="browser" />
   </ItemGroup>
+
+  <!-- BgQuiz's WebAssembly client ships this assembly, and its publish runs
+       trim analysis with warnings as errors. The library declares itself
+       trim-compatible and runs the analyzer in its own build, so a
+       trim-unsafe construct added here — reflection over a caller's type, a
+       reflection-bound serializer overload — fails this repo's build
+       (TreatWarningsAsErrors) in the change that introduced it, rather than
+       BgQuiz's publish a leg later. Per-project deliberately: the test
+       project is not a shipped surface. IsTrimmable is pinned by
+       BgUiPrimitivesRazorTrimPostureTests. -->
+  <PropertyGroup>
+    <IsTrimmable>true</IsTrimmable>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+  </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Components.Web" />
