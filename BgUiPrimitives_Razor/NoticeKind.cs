@@ -7,8 +7,8 @@ namespace BgUiPrimitives_Razor;
 /// </summary>
 /// <remarks>
 /// Kind decides colour and nothing else. Whether a notice may be dismissed
-/// (<see cref="Notice.Dismissible"/>) and how urgently it is announced
-/// (<see cref="Notice.Urgency"/>) are separate decisions, because what a box
+/// (<see cref="Notice.Dismissible"/>) and how it is announced
+/// (<see cref="Notice.Announcement"/>) are separate decisions, because what a box
 /// <em>is</em> decides them, never its colour (the umbrella's
 /// SPEC-notices.md, sections 1 and 3).
 /// </remarks>

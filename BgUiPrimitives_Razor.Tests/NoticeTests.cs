@@ -28,6 +28,9 @@ public class NoticeTests : BunitContext
 
     private static IElement Box(IRenderedComponent<Notice> cut) => cut.Find("div.alert");
 
+    private static IElement Wrapper(IRenderedComponent<Notice> cut)
+        => cut.Find("div.alert > div.bg-notice-content");
+
     private static bool IsShown<TComponent>(IRenderedComponent<TComponent> cut)
         where TComponent : IComponent
         => cut.FindAll("div.alert").Count == 1;
@@ -65,35 +68,99 @@ public class NoticeTests : BunitContext
         Assert.Throws<InvalidOperationException>(() => RenderNotice((NoticeKind)(-1)));
     }
 
-    // ---- Urgency → role ------------------------------------------------
+    // ---- Announcement → the live region ---------------------------------
 
     [Fact]
-    public void Urgency_DefaultsToPolite_RoleStatus()
+    public void Announcement_DefaultsToPolite_RoleStatus()
     {
         var cut = RenderNotice(NoticeKind.Error);
 
-        Assert.Equal("status", Box(cut).GetAttribute("role"));
+        Assert.Equal("status", Wrapper(cut).GetAttribute("role"));
     }
 
-    // Urgency is not colour: the same kind takes either role.
+    // Announcement is not colour: the same kind takes either role.
     [Theory]
-    [InlineData(NoticeUrgency.Polite, "status")]
-    [InlineData(NoticeUrgency.Assertive, "alert")]
-    public void Urgency_DecidesTheRole_IndependentOfKind(NoticeUrgency urgency, string expectedRole)
+    [InlineData(NoticeAnnouncement.Polite, "status")]
+    [InlineData(NoticeAnnouncement.Assertive, "alert")]
+    public void Announcement_DecidesTheRole_IndependentOfKind(
+        NoticeAnnouncement announcement, string expectedRole)
     {
         foreach (var kind in Enum.GetValues<NoticeKind>())
         {
-            var cut = RenderNotice(kind, more: p => p.Add(x => x.Urgency, urgency));
+            var cut = RenderNotice(kind, more: p => p.Add(x => x.Announcement, announcement));
 
-            Assert.Equal(expectedRole, Box(cut).GetAttribute("role"));
+            Assert.Equal(expectedRole, Wrapper(cut).GetAttribute("role"));
+        }
+    }
+
+    // A status or alert region is implicitly atomic, so whatever is inside it
+    // is presented with the message. The region is therefore the content
+    // wrapper and nothing else: the box carries no role, and the close button
+    // is the region's sibling, never its descendant — for both shapes of box.
+    [Theory]
+    [InlineData(NoticeAnnouncement.Polite, false)]
+    [InlineData(NoticeAnnouncement.Polite, true)]
+    [InlineData(NoticeAnnouncement.Assertive, false)]
+    [InlineData(NoticeAnnouncement.Assertive, true)]
+    public void TheLiveRegion_IsTheContentWrapper_AndHoldsOnlyTheContent(
+        NoticeAnnouncement announcement, bool dismissible)
+    {
+        var cut = RenderNotice(dismissible: dismissible,
+            more: p => p.Add(x => x.Announcement, announcement));
+
+        var region = Assert.Single(cut.FindAll("[role]"));
+        Assert.True(region.Matches("div.alert > div.bg-notice-content"));
+        Assert.False(Box(cut).HasAttribute("role"));
+        Assert.Equal(Text, region.TextContent);
+        Assert.Empty(region.QuerySelectorAll("button"));
+        Assert.Equal(dismissible ? 1 : 0, cut.FindAll("div.alert > button.btn-close").Count);
+    }
+
+    // Inside a region the caller keeps mounted, the notice must add no region
+    // of its own: no live-region role and no live-region attribute, on any
+    // element, in either shape of box — and the rest of the box is unchanged.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AnnouncedByAnEnclosingRegion_RendersNoLiveRegionOfItsOwn(bool dismissible)
+    {
+        var cut = RenderNotice(NoticeKind.Success, dismissible,
+            p => p.Add(x => x.Announcement, NoticeAnnouncement.ByEnclosingRegion));
+
+        Assert.Empty(cut.FindAll("[role], [aria-live], [aria-atomic], [aria-relevant]"));
+        Assert.Equal(Text, Wrapper(cut).TextContent);
+        Assert.Equal(dismissible ? 1 : 0, cut.FindAll("div.alert > button.btn-close").Count);
+    }
+
+    // The shape the value exists for: the caller's standing region is the only
+    // live region in the tree, and the box is inside it.
+    [Fact]
+    public void AnnouncedByAnEnclosingRegion_TheCallersRegionIsTheOnlyOne()
+    {
+        var cut = Render<StandingRegionHost>();
+
+        var region = Assert.Single(cut.FindAll("[role]"));
+        Assert.Equal("loadedNotice", region.Id);
+        Assert.Equal("status", region.GetAttribute("role"));
+        Assert.NotNull(region.QuerySelector("div.alert.alert-success"));
+    }
+
+    // Every declared value renders: a value added to the enum without an arm
+    // fails here rather than throwing in a consumer's page.
+    [Fact]
+    public void EveryDeclaredAnnouncement_Renders()
+    {
+        foreach (var announcement in Enum.GetValues<NoticeAnnouncement>())
+        {
+            Assert.True(IsShown(RenderNotice(more: p => p.Add(x => x.Announcement, announcement))));
         }
     }
 
     [Fact]
-    public void UndeclaredUrgency_Throws()
+    public void UndeclaredAnnouncement_Throws()
     {
         Assert.Throws<InvalidOperationException>(
-            () => RenderNotice(more: p => p.Add(x => x.Urgency, (NoticeUrgency)(-1))));
+            () => RenderNotice(more: p => p.Add(x => x.Announcement, (NoticeAnnouncement)(-1))));
     }
 
     // ---- Dismissibility ------------------------------------------------
@@ -268,18 +335,51 @@ public class NoticeTests : BunitContext
         Assert.Equal("alert alert-success", Box(cut).GetAttribute("class"));
     }
 
-    // The silent-splat guard: a role or click handler left on the tag by a
-    // migrating caller would lose to the component's without a word.
+    // The splat guard. A click handler left on the tag by a migrating caller
+    // would lose to the component's without a word; a role or live-region
+    // attribute would land on the box and make it a second live region, which
+    // is Announcement's decision and nobody else's.
     [Theory]
     [InlineData("role")]
     [InlineData("ROLE")]
     [InlineData("onclick")]
+    [InlineData("aria-live")]
+    [InlineData("Aria-Live")]
+    [InlineData("aria-atomic")]
+    [InlineData("aria-relevant")]
     public void AnAttributeTheComponentOwns_IsRefused(string name)
     {
         var ex = Assert.Throws<InvalidOperationException>(
             () => RenderNotice(more: p => p.AddUnmatched(name, "alert")));
 
         Assert.Contains(name, ex.Message);
+    }
+
+    // Refused whatever the announcement: there is no value of Announcement a
+    // caller's live-region attribute agrees with. Under ByEnclosingRegion it
+    // is the rejected aria-live="off" workaround by another door.
+    [Fact]
+    public void ALiveRegionAttribute_IsRefused_UnderEveryAnnouncement()
+    {
+        foreach (var announcement in Enum.GetValues<NoticeAnnouncement>())
+        {
+            foreach (var name in new[] { "role", "aria-live", "aria-atomic", "aria-relevant" })
+            {
+                Assert.Throws<InvalidOperationException>(() => RenderNotice(more: p => p
+                    .Add(x => x.Announcement, announcement)
+                    .AddUnmatched(name, "off")));
+            }
+        }
+    }
+
+    // What the splat is still for: an aria attribute that is not a
+    // live-region one passes through to the box like any other.
+    [Fact]
+    public void AnOrdinaryAriaAttribute_StillLandsOnTheBox()
+    {
+        var cut = RenderNotice(more: p => p.AddUnmatched("aria-describedby", "hint"));
+
+        Assert.Equal("hint", Box(cut).GetAttribute("aria-describedby"));
     }
 
     // ---- Dismissal held by the component -------------------------------
@@ -452,6 +552,26 @@ public class NoticeTests : BunitContext
             {
                 IsDismissed = dismissed;
             }
+        }
+    }
+
+    // The first adopter's shape: a polite region the caller keeps mounted so
+    // that its fills are announced reliably, with the notice as its content.
+    private sealed class StandingRegionHost : ComponentBase
+    {
+        protected override void BuildRenderTree(RenderTreeBuilder builder)
+        {
+            builder.OpenElement(0, "div");
+            builder.AddAttribute(1, "id", "loadedNotice");
+            builder.AddAttribute(2, "role", "status");
+            builder.OpenComponent<Notice>(3);
+            builder.AddComponentParameter(4, nameof(Notice.Kind), NoticeKind.Success);
+            builder.AddComponentParameter(5, nameof(Notice.Announcement),
+                NoticeAnnouncement.ByEnclosingRegion);
+            builder.AddComponentParameter(6, nameof(Notice.ChildContent),
+                (RenderFragment)(content => content.AddContent(0, Text)));
+            builder.CloseComponent();
+            builder.CloseElement();
         }
     }
 

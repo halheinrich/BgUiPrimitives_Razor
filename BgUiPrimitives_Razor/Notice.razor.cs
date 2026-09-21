@@ -6,7 +6,7 @@ namespace BgUiPrimitives_Razor;
 /// <summary>
 /// A notice box: the one owner of alert markup, so that no member types it
 /// again. The caller says what the notice <em>is</em> — its
-/// <see cref="Kind"/>, its <see cref="Urgency"/>, whether it is
+/// <see cref="Kind"/>, its <see cref="Announcement"/>, whether it is
 /// <see cref="Dismissible"/> — and the component owns what that means in
 /// classes, roles and gestures. The model it implements is the umbrella's
 /// SPEC-notices.md, sections 2 and 3.
@@ -46,6 +46,17 @@ namespace BgUiPrimitives_Razor;
 /// adds nothing to get that.
 /// </para>
 /// <para>
+/// <b>Announcement.</b> A notice that announces itself carries its
+/// live-region role on the content wrapper, never on the box. A
+/// <c>status</c> or <c>alert</c> region is implicitly atomic (WAI-ARIA 1.2,
+/// section 5.4), so assistive technology presents the region's entire
+/// contents (section 6.7, <c>aria-atomic</c>); the close button is the box's
+/// control, not part of the message, and sits outside the region as the
+/// wrapper's sibling. A notice announced by an enclosing region
+/// (<see cref="NoticeAnnouncement.ByEnclosingRegion"/>) renders no
+/// live-region role or attribute anywhere.
+/// </para>
+/// <para>
 /// <b>Host obligations.</b> The component emits Bootstrap 5 alert classes
 /// (<c>alert</c>, <c>alert-*</c>, <c>alert-dismissible</c>,
 /// <c>btn-close</c>); the host supplies Bootstrap. The little Bootstrap lacks
@@ -59,9 +70,13 @@ public sealed partial class Notice : ComponentBase
     // member reads the same to a screen reader.
     private const string CloseButtonLabel = "Dismiss this message";
 
-    // Attribute names the component owns on the box. A caller's copy would
-    // lose to the component's silently, so it is refused instead.
-    private static readonly string[] OwnedAttributeNames = ["role", "onclick"];
+    // Attribute names the component owns. A caller's onclick would lose to the
+    // component's silently. A caller's role or live-region attribute would
+    // land on the box and make it a second live region — around the notice's
+    // own, or inside the enclosing one — which is the very thing Announcement
+    // exists to decide. Each is refused instead.
+    private static readonly string[] OwnedAttributeNames =
+        ["role", "onclick", "aria-live", "aria-atomic", "aria-relevant"];
 
     // True when the caller bound Dismissed, and so holds the dismissal. Decided
     // by which parameters were supplied, never by their values.
@@ -85,13 +100,15 @@ public sealed partial class Notice : ComponentBase
     public RenderFragment? ChildContent { get; set; }
 
     /// <summary>
-    /// How insistently the notice is announced. Defaults to
-    /// <see cref="NoticeUrgency.Polite"/>; choose
-    /// <see cref="NoticeUrgency.Assertive"/> for a failed gesture or an
-    /// impending loss. Independent of <see cref="Kind"/>.
+    /// How the notice comes to be announced. Defaults to
+    /// <see cref="NoticeAnnouncement.Polite"/>; choose
+    /// <see cref="NoticeAnnouncement.Assertive"/> for a failed gesture or an
+    /// impending loss, and <see cref="NoticeAnnouncement.ByEnclosingRegion"/>
+    /// when the notice sits inside a live region the caller keeps mounted,
+    /// which then does the announcing. Independent of <see cref="Kind"/>.
     /// </summary>
     [Parameter]
-    public NoticeUrgency Urgency { get; set; }
+    public NoticeAnnouncement Announcement { get; set; }
 
     /// <summary>
     /// Whether the user may dismiss the notice. Defaults to
@@ -135,11 +152,12 @@ public sealed partial class Notice : ComponentBase
     public object? OccurrenceKey { get; set; }
 
     /// <summary>
-    /// Every other attribute — <c>id</c>, <c>style</c>, <c>data-*</c>,
-    /// <c>aria-*</c> — lands on the box element itself. A <c>class</c> is
-    /// merged after the component's own classes, never replacing them.
-    /// <c>role</c> and <c>onclick</c> belong to the component
-    /// (<see cref="Urgency"/>, <see cref="Dismissible"/>) and throw if
+    /// Every other attribute — <c>id</c>, <c>style</c>, <c>data-*</c> — lands
+    /// on the box element itself. A <c>class</c> is merged after the
+    /// component's own classes, never replacing them. <c>role</c>,
+    /// <c>aria-live</c>, <c>aria-atomic</c> and <c>aria-relevant</c>
+    /// (<see cref="Announcement"/>) and <c>onclick</c>
+    /// (<see cref="Dismissible"/>) belong to the component and throw if
     /// supplied.
     /// </summary>
     [Parameter(CaptureUnmatchedValues = true)]
@@ -175,12 +193,15 @@ public sealed partial class Notice : ComponentBase
             $"{nameof(Notice)}.{nameof(Kind)} has no stylesheet class for the value {Kind}."),
     };
 
-    private string Role => Urgency switch
+    // The content wrapper's live-region role. Null renders no attribute: the
+    // enclosing region announces, and the notice adds no region of its own.
+    private string? ContentRole => Announcement switch
     {
-        NoticeUrgency.Polite => "status",
-        NoticeUrgency.Assertive => "alert",
+        NoticeAnnouncement.Polite => "status",
+        NoticeAnnouncement.Assertive => "alert",
+        NoticeAnnouncement.ByEnclosingRegion => null,
         _ => throw new InvalidOperationException(
-            $"{nameof(Notice)}.{nameof(Urgency)} has no ARIA role for the value {Urgency}."),
+            $"{nameof(Notice)}.{nameof(Announcement)} has no rendering for the value {Announcement}."),
     };
 
     // No delegate when the notice is not dismissible, so the renderer emits no
@@ -232,9 +253,10 @@ public sealed partial class Notice : ComponentBase
                 if (OwnedAttributeNames.Contains(name, StringComparer.OrdinalIgnoreCase))
                 {
                     throw new InvalidOperationException(
-                        $"{nameof(Notice)} owns the box's '{name}' attribute; use "
-                        + $"{nameof(Urgency)} for the role and {nameof(Dismissible)} for the "
-                        + "click. An attribute passed here would be silently overridden.");
+                        $"{nameof(Notice)} owns the '{name}' attribute; use "
+                        + $"{nameof(Announcement)} for how the notice is announced and "
+                        + $"{nameof(Dismissible)} for the click. An attribute passed here would "
+                        + "contradict the component's own or be silently overridden.");
                 }
             }
         }

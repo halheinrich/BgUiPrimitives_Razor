@@ -3,9 +3,16 @@
 
    Attribute order is load-bearing: the caller's attributes are splatted
    first, so the component's own class (which already contains the caller's,
-   merged) and role are the ones that land. The two names a caller's
-   attribute could silently lose to — role and onclick — are refused in
-   SetParametersAsync rather than overridden here.
+   merged) is the one that lands. The names a caller's attribute would
+   contradict or silently lose to — role, onclick and the live-region
+   attributes — are refused in OnParametersSet rather than overridden here.
+
+   The live-region role sits on the content wrapper, not on the box. A status
+   or alert region is implicitly atomic, so everything inside it is presented
+   with the message; the close button is the box's control, not part of what
+   the notice says, and as the wrapper's sibling it is outside the region. A
+   notice announced by an enclosing region has a null role, and the renderer
+   omits an attribute whose value is null.
 
    One click handler, on the box. The close button deliberately carries none:
    its click bubbles to the box, so both gestures take the same single path
@@ -13,14 +20,14 @@
    delegate, and the renderer elides an event attribute whose callback has
    none, so such a box carries no handler at all.
 
-   The content wrapper is what keeps inner interactive content from
+   The content wrapper is also what keeps inner interactive content from
    dismissing: a click that originates inside it never reaches the box.
    Notice.razor.css hands clicks on the wrapper's non-interactive content
    back to the box, which is how the whole box stays the large target. *@
 @if (!IsDismissed)
 {
-    <div @attributes="AdditionalAttributes" class="@BoxClass" role="@Role" @onclick="BoxClick">
-        <div class="bg-notice-content" @onclick:stopPropagation="Dismissible">@ChildContent</div>
+    <div @attributes="AdditionalAttributes" class="@BoxClass" @onclick="BoxClick">
+        <div class="bg-notice-content" role="@ContentRole" @onclick:stopPropagation="Dismissible">@ChildContent</div>
         @if (Dismissible)
         {
             <button type="button" class="btn-close" aria-label="@CloseButtonLabel"></button>

@@ -41,8 +41,8 @@ carries one `@using` however many primitives the library grows. Its occupant:
 
 - **The notice** — `Notice`, the component (markup in `Notice.razor`,
   parameters and the dismissal model in its code-behind, the little CSS
-  Bootstrap lacks in `Notice.razor.css`); `NoticeKind` and `NoticeUrgency`,
-  the user-level selectors its callers name.
+  Bootstrap lacks in `Notice.razor.css`); `NoticeKind` and
+  `NoticeAnnouncement`, the user-level selectors its callers name.
 
 **`BgUiPrimitives_Razor.Tests/`** — xUnit + bUnit. Renders the real component
 and drives it through real DOM events; the caller-held dismissal path is
@@ -65,11 +65,38 @@ none of them a CSS or ARIA string:
 | The caller names | The component owns |
 | --- | --- |
 | `Kind` — what the notice tells the user | the Bootstrap alert class, and so the colour |
-| `Urgency` — polite or assertive | the ARIA role (`status` / `alert`) |
+| `Announcement` — politely, assertively, or by an enclosing region | the ARIA role (`status` / `alert` / none), and which element carries it |
 | `Dismissible` — whether the user may close it | the close button, the click target, the `alert-dismissible` class |
 
 Colour decides nothing but colour. A yellow box may be polite or assertive,
 dismissible or not; what the box *is* decides those (model, section 1).
+
+### Who announces, and what the live region holds
+
+**One decision, not two.** A notice either announces itself — politely or
+assertively — or sits inside a live region the caller keeps mounted, which
+announces it. In the second case the notice has no urgency of its own to
+state: the enclosing region decides that. So "how insistently" and "who
+announces" are one selector, `NoticeAnnouncement`, and a contradictory pair
+(enclosed *and* assertive) cannot be written, rather than being written and
+thrown. `ByEnclosingRegion` renders no live-region role or attribute on any
+element: one live region nested in another is announced twice by some screen
+readers, and is not what ARIA intends.
+
+**The region is the content wrapper, never the box.** `role="status"` and
+`role="alert"` each carry an implicit `aria-atomic="true"` (WAI-ARIA 1.2
+§5.4, the two role definitions), and an atomic region is presented as "the
+entire contents of the element" (§6.7, `aria-atomic`). With the role on the
+box, the close button would be part of what every dismissible notice says.
+The button is the box's control, not part of the message, so the role sits
+on `div.bg-notice-content` and the button is that region's sibling.
+
+**The live-region attributes belong to the component.** A caller's `role`,
+`aria-live`, `aria-atomic` or `aria-relevant` would land on the box and make
+it a second live region — around the notice's own, or inside the enclosing
+one — so each is refused, under every `Announcement`. That includes
+`aria-live="off"`: the way to say "something else announces this" is
+`ByEnclosingRegion`.
 
 ### One holder per dismissal
 
@@ -135,11 +162,14 @@ caller's selector does not change when `Dismissible` does.
 ### The caller's attributes
 
 Unmatched attributes are splatted onto the box element itself. The caller's
-`class` is merged *after* the component's own classes. `role` and `onclick`
-belong to the component and are refused with an `InvalidOperationException`
-rather than silently overridden — the Razor silent-splat hazard, closed at
-the one place a migrating caller would otherwise leave `role="alert"` on the
-tag and lose it without a word.
+`class` is merged *after* the component's own classes. `onclick`, `role` and
+the live-region attributes (`aria-live`, `aria-atomic`, `aria-relevant`)
+belong to the component and are refused with an `InvalidOperationException`.
+`onclick` is the Razor silent-splat hazard — the component's would win
+without a word. `role` and the live-region attributes are worse than lost:
+the component no longer writes a role on the box, so a migrating caller's
+`role="alert"` left on the tag would *land*, and wrap the notice's own region
+in a second one.
 
 ### Trim posture
 
@@ -165,15 +195,18 @@ public enum NoticeKind { Information, Warning, Error, Success }
 
 Rendered as `alert-info`, `alert-warning`, `alert-danger`, `alert-success`.
 
-### `NoticeUrgency`
+### `NoticeAnnouncement`
 
 ```csharp
-public enum NoticeUrgency { Polite, Assertive }
+public enum NoticeAnnouncement { Polite, Assertive, ByEnclosingRegion }
 ```
 
 `Polite` (the default) renders `role="status"`: an outcome the user should
 understand. `Assertive` renders `role="alert"`: a gesture that failed, or a
-loss about to happen.
+loss about to happen. `ByEnclosingRegion` renders no role and no live-region
+attribute: the notice sits inside a live region the caller keeps mounted, and
+that region announces it, as insistently as *it* says. The role, when there
+is one, is on the content wrapper, not the box.
 
 ### `Notice`
 
@@ -182,7 +215,7 @@ public sealed partial class Notice : ComponentBase
 {
     [Parameter, EditorRequired] public NoticeKind Kind { get; set; }
     [Parameter, EditorRequired] public RenderFragment? ChildContent { get; set; }
-    [Parameter] public NoticeUrgency Urgency { get; set; }            // default Polite
+    [Parameter] public NoticeAnnouncement Announcement { get; set; }  // default Polite
     [Parameter] public bool Dismissible { get; set; }                 // default false
     [Parameter] public bool Dismissed { get; set; }                   // bind only
     [Parameter] public EventCallback<bool> DismissedChanged { get; set; }
@@ -214,39 +247,68 @@ Contracts:
   occurrence can arrive while the notice stays rendered; a notice that is
   removed from the render tree and rendered again starts fresh regardless.
   Supplying it together with a bound `Dismissed` throws.
-- **`AdditionalAttributes`** — `id`, `style`, `data-*`, `aria-*` and the rest
-  land on the box element. `class` is merged after the component's classes
-  (blank adds nothing). `role` and `onclick` throw, in any casing.
-- A `Kind` or `Urgency` value outside its enum throws.
+- **`Announcement`** — `Polite` by default. Decides the role on the content
+  wrapper (`status`, `alert`, or no attribute at all); the box itself never
+  carries a role. There is no second parameter it could contradict.
+- **`AdditionalAttributes`** — `id`, `style`, `data-*` and the rest land on
+  the box element. `class` is merged after the component's classes (blank
+  adds nothing). `role`, `onclick`, `aria-live`, `aria-atomic` and
+  `aria-relevant` throw, in any casing and under every `Announcement`. Other
+  `aria-*` attributes pass through to the box.
+- A `Kind` or `Announcement` value outside its enum throws.
 
 Rendered shape (the scope attribute CSS isolation stamps on each element is
 omitted):
 
 ```html
-<!-- dismissible -->
-<div id="…" class="alert alert-warning alert-dismissible mt-2" role="status">
-  <div class="bg-notice-content">…content…</div>
+<!-- dismissible, announces itself -->
+<div id="…" class="alert alert-warning alert-dismissible mt-2">
+  <div class="bg-notice-content" role="status">…content…</div>
   <button type="button" class="btn-close" aria-label="Dismiss this message"></button>
 </div>
 
-<!-- not dismissible -->
-<div class="alert alert-warning zero-match-notice" role="alert">
+<!-- not dismissible, announces itself -->
+<div class="alert alert-warning zero-match-notice">
+  <div class="bg-notice-content" role="alert">…content…</div>
+</div>
+
+<!-- announced by the enclosing region: no role, no aria-live, anywhere -->
+<div class="alert alert-success mt-3 mb-0">
   <div class="bg-notice-content">…content…</div>
 </div>
 ```
 
 The box is the element carrying `alert`; the caller's id and marker classes
-select it directly. The close button is `button.btn-close`, a direct child of
-the box. When dismissed, the component renders nothing.
+select it directly. The live region is `div.bg-notice-content`, a direct
+child of the box, present in every shape. The close button is
+`button.btn-close`, a direct child of the box and the region's sibling. When
+dismissed, the component renders nothing.
 
 ### Call shapes
 
 A gate reason or live indicator — not dismissible, nothing else to say:
 
 ```razor
-<Notice Kind="NoticeKind.Warning" Urgency="NoticeUrgency.Assertive" class="zero-match-notice">
+<Notice Kind="NoticeKind.Warning" Announcement="NoticeAnnouncement.Assertive" class="zero-match-notice">
     No positions matched the filter.
 </Notice>
+```
+
+A notice inside a live region the caller keeps mounted — the region is
+rendered unconditionally and only its content swaps, because a live region
+that first appears in the very render that fills it is announced unreliably.
+The region announces; the notice adds none of its own:
+
+```razor
+<div id="loadedNotice" role="status">
+    @if (_loadedName is not null)
+    {
+        <Notice Kind="NoticeKind.Success" Announcement="NoticeAnnouncement.ByEnclosingRegion"
+                class="mt-3 mb-0">
+            @_loadedName loaded.
+        </Notice>
+    }
+</div>
 ```
 
 A notice whose occurrence dies with the page — the component holds the
@@ -254,7 +316,7 @@ dismissal and the caller writes no state. `OccurrenceKey` only if a new
 occurrence can replace the old one while the notice stays rendered:
 
 ```razor
-<Notice id="runError" Kind="NoticeKind.Error" Urgency="NoticeUrgency.Assertive"
+<Notice id="runError" Kind="NoticeKind.Error" Announcement="NoticeAnnouncement.Assertive"
         Dismissible="true" OccurrenceKey="_runNumber">
     @_runError
 </Notice>
@@ -285,13 +347,29 @@ A notice whose occurrence outlives the page — the owner holds the dismissal:
 
 ## Pitfalls
 
-- **Migrating a hand-written box.** Delete the old `role="…"`,
+- **Migrating a hand-written box.** Delete the old `role="…"`, `aria-live`,
   `@onclick` and `@onclick:stopPropagation` with the markup they sat on; the
-  `role` and `@onclick` throw if left on the `<Notice>` tag, by design. Map the old role
-  to `Urgency` (`status` → `Polite`, `alert` → `Assertive`) rather than
-  assuming the default. Drop `alert`, `alert-*` and `alert-dismissible` from
-  the `class` you pass — they would be emitted twice — and keep only marker
-  and spacing classes.
+  `role`, the live-region attributes and `@onclick` throw if left on the
+  `<Notice>` tag, by design. Map the old role to `Announcement` (`status` →
+  `Polite`, `alert` → `Assertive`) rather than assuming the default. A box
+  that carried **no role** is a question, not a default: if it sits inside a
+  live region that stays mounted, it is `ByEnclosingRegion`; if nothing
+  announced it, decide whether that was a defect and choose `Polite` or
+  `Assertive`. Drop `alert`, `alert-*` and `alert-dismissible` from the
+  `class` you pass — they would be emitted twice — and keep only marker and
+  spacing classes.
+- **The role is not on the box.** A test or selector that reads `role` on the
+  element found by the notice's id — `box.GetAttribute("role")`,
+  `div.alert-warning[role=alert]` — finds nothing. Read it on the box's
+  `div.bg-notice-content` child (`#id > .bg-notice-content`,
+  `div.alert-warning > [role=alert]`).
+- **`ByEnclosingRegion` is a claim the component cannot check.** It renders
+  no role on the caller's word that a mounted live region encloses the
+  notice. Used with no such region, the notice is announced by nobody. The
+  enclosing region must already be in the DOM before the notice fills it —
+  render the region unconditionally and the `<Notice>` conditionally inside.
+- **Never nest a self-announcing notice in a live region**, and never reach
+  for `aria-live="off"` to quiet one — it throws. Say `ByEnclosingRegion`.
 - **Deciding `Dismissible` is a model question, not a colour question.** Use
   the gate-reason test in `../SPEC-notices.md` section 1. The default is
   `false` on purpose.
@@ -323,8 +401,12 @@ A notice whose occurrence outlives the page — the owner holds the dismissal:
   inner-content rule and no bUnit test can execute them. After any change,
   check in a real browser that a click on plain text targets the box and a
   click on an inner link or button targets that element.
-- **Adding a `NoticeKind` or `NoticeUrgency` value** means adding its arm to
-  the component's switch; an enum value without one throws at render.
+- **Adding a `NoticeKind` or `NoticeAnnouncement` value** means adding its arm
+  to the component's switch; an enum value without one throws at render.
+- **Do not move the role back onto the box, or the close button into the
+  wrapper.** Either puts the button's accessible name inside an atomic live
+  region, so every dismissible notice would read "Dismiss this message,
+  button" after its text.
 - **Adding a primitive.** It goes in the root namespace, takes user-level
   selectors, and knows nothing of any domain. If it needs a member's type, it
   belongs in that member.
