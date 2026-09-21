@@ -1,4 +1,4 @@
-using AngleSharp.Dom;
+using BgUiPrimitives_Razor.TestSupport;
 using Bunit;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
@@ -9,6 +9,13 @@ namespace BgUiPrimitives_Razor.Tests;
 // section 3 (how a notice presents) and section 2 (what a dismissal is and
 // what it survives), plus the fail-loud guards on the parameter combinations
 // that would otherwise let the screen and the dismissal's owner disagree.
+//
+// What a notice looks like in markup is read through NoticeBox, the reader
+// consumers' tests use: these tests say what the notice is, in the
+// component's vocabulary, and the reader — pinned against literal markup by
+// NoticeBoxTests — owns the classes, the roles and where they sit. What the
+// reader does not cover (the close button's own semantics, the scope
+// attribute) is still read here directly.
 public class NoticeTests : BunitContext
 {
     private const string Text = "Something happened.";
@@ -26,39 +33,41 @@ public class NoticeTests : BunitContext
             more?.Invoke(parameters);
         });
 
-    private static IElement Box(IRenderedComponent<Notice> cut) => cut.Find("div.alert");
+    private static NoticeBox Box(IRenderedComponent<IComponent> cut)
+        => Assert.Single(NoticeBox.AllIn(cut));
 
-    private static IElement Wrapper(IRenderedComponent<Notice> cut)
-        => cut.Find("div.alert > div.bg-notice-content");
+    private static bool IsShown(IRenderedComponent<IComponent> cut)
+        => NoticeBox.AllIn(cut).Count == 1;
 
-    private static bool IsShown<TComponent>(IRenderedComponent<TComponent> cut)
-        where TComponent : IComponent
-        => cut.FindAll("div.alert").Count == 1;
+    public static TheoryData<NoticeDismissGesture> BothGestures =>
+        new(Enum.GetValues<NoticeDismissGesture>());
 
-    // ---- Kind → colour -------------------------------------------------
+    // ---- What the caller names is what renders -------------------------
 
-    // The whole class list, not a Contains: with no caller class the box
-    // carries the component's classes and nothing else.
-    [Theory]
-    [InlineData(NoticeKind.Information, "alert alert-info")]
-    [InlineData(NoticeKind.Warning, "alert alert-warning")]
-    [InlineData(NoticeKind.Error, "alert alert-danger")]
-    [InlineData(NoticeKind.Success, "alert alert-success")]
-    public void Kind_DecidesTheStylesheetClass(NoticeKind kind, string expectedClass)
-    {
-        var cut = RenderNotice(kind);
-
-        Assert.Equal(expectedClass, Box(cut).GetAttribute("class"));
-    }
-
-    // Every declared kind has a class: a kind added to the enum without one
-    // fails here rather than throwing in a consumer's page.
+    // The three selectors are independent — announcement is not colour, and
+    // neither decides dismissibility — so every combination renders as asked,
+    // in a well-formed box: the announcement on the content and nowhere else,
+    // the close button (when there is one) outside it, and nothing on the box
+    // or in its class list that the caller did not pass. With
+    // ByEnclosingRegion that is no live-region role or attribute anywhere.
     [Fact]
-    public void EveryDeclaredKind_Renders()
+    public void EveryCombination_RendersAsAsked_WithTheContentInside()
     {
         foreach (var kind in Enum.GetValues<NoticeKind>())
         {
-            Assert.True(IsShown(RenderNotice(kind)));
+            foreach (var announcement in Enum.GetValues<NoticeAnnouncement>())
+            {
+                foreach (var dismissible in new[] { false, true })
+                {
+                    var cut = RenderNotice(kind, dismissible,
+                        p => p.Add(x => x.Announcement, announcement));
+
+                    var box = Box(cut).ShouldBe(kind, announcement, dismissible);
+                    Assert.Empty(box.CallerClasses);
+                    Assert.Equal(Text, box.Content.TextContent);
+                    Assert.Equal(Text, box.Element.TextContent);
+                }
+            }
         }
     }
 
@@ -68,72 +77,27 @@ public class NoticeTests : BunitContext
         Assert.Throws<InvalidOperationException>(() => RenderNotice((NoticeKind)(-1)));
     }
 
-    // ---- Announcement → the live region ---------------------------------
-
     [Fact]
-    public void Announcement_DefaultsToPolite_RoleStatus()
+    public void UndeclaredAnnouncement_Throws()
     {
-        var cut = RenderNotice(NoticeKind.Error);
-
-        Assert.Equal("status", Wrapper(cut).GetAttribute("role"));
+        Assert.Throws<InvalidOperationException>(
+            () => RenderNotice(more: p => p.Add(x => x.Announcement, (NoticeAnnouncement)(-1))));
     }
 
-    // Announcement is not colour: the same kind takes either role.
-    [Theory]
-    [InlineData(NoticeAnnouncement.Polite, "status")]
-    [InlineData(NoticeAnnouncement.Assertive, "alert")]
-    public void Announcement_DecidesTheRole_IndependentOfKind(
-        NoticeAnnouncement announcement, string expectedRole)
+    // The defaults are the safe ones: a caller that names only the kind gets
+    // a polite box the user cannot close.
+    [Fact]
+    public void ByDefault_TheNoticeIsPolite_AndNotDismissible()
     {
-        foreach (var kind in Enum.GetValues<NoticeKind>())
-        {
-            var cut = RenderNotice(kind, more: p => p.Add(x => x.Announcement, announcement));
+        var cut = Render<Notice>(parameters => parameters
+            .Add(p => p.Kind, NoticeKind.Warning)
+            .AddChildContent(Text));
 
-            Assert.Equal(expectedRole, Wrapper(cut).GetAttribute("role"));
-        }
+        Box(cut).ShouldBe(NoticeKind.Warning, NoticeAnnouncement.Polite, dismissible: false);
     }
 
-    // A status or alert region is implicitly atomic, so whatever is inside it
-    // is presented with the message. The region is therefore the content
-    // wrapper and nothing else: the box carries no role, and the close button
-    // is the region's sibling, never its descendant — for both shapes of box.
-    [Theory]
-    [InlineData(NoticeAnnouncement.Polite, false)]
-    [InlineData(NoticeAnnouncement.Polite, true)]
-    [InlineData(NoticeAnnouncement.Assertive, false)]
-    [InlineData(NoticeAnnouncement.Assertive, true)]
-    public void TheLiveRegion_IsTheContentWrapper_AndHoldsOnlyTheContent(
-        NoticeAnnouncement announcement, bool dismissible)
-    {
-        var cut = RenderNotice(dismissible: dismissible,
-            more: p => p.Add(x => x.Announcement, announcement));
-
-        var region = Assert.Single(cut.FindAll("[role]"));
-        Assert.True(region.Matches("div.alert > div.bg-notice-content"));
-        Assert.False(Box(cut).HasAttribute("role"));
-        Assert.Equal(Text, region.TextContent);
-        Assert.Empty(region.QuerySelectorAll("button"));
-        Assert.Equal(dismissible ? 1 : 0, cut.FindAll("div.alert > button.btn-close").Count);
-    }
-
-    // Inside a region the caller keeps mounted, the notice must add no region
-    // of its own: no live-region role and no live-region attribute, on any
-    // element, in either shape of box — and the rest of the box is unchanged.
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void AnnouncedByAnEnclosingRegion_RendersNoLiveRegionOfItsOwn(bool dismissible)
-    {
-        var cut = RenderNotice(NoticeKind.Success, dismissible,
-            p => p.Add(x => x.Announcement, NoticeAnnouncement.ByEnclosingRegion));
-
-        Assert.Empty(cut.FindAll("[role], [aria-live], [aria-atomic], [aria-relevant]"));
-        Assert.Equal(Text, Wrapper(cut).TextContent);
-        Assert.Equal(dismissible ? 1 : 0, cut.FindAll("div.alert > button.btn-close").Count);
-    }
-
-    // The shape the value exists for: the caller's standing region is the only
-    // live region in the tree, and the box is inside it.
+    // The shape ByEnclosingRegion exists for: the caller's standing region is
+    // the only live region in the tree, and the box is inside it.
     [Fact]
     public void AnnouncedByAnEnclosingRegion_TheCallersRegionIsTheOnlyOne()
     {
@@ -142,100 +106,51 @@ public class NoticeTests : BunitContext
         var region = Assert.Single(cut.FindAll("[role]"));
         Assert.Equal("loadedNotice", region.Id);
         Assert.Equal("status", region.GetAttribute("role"));
-        Assert.NotNull(region.QuerySelector("div.alert.alert-success"));
-    }
 
-    // Every declared value renders: a value added to the enum without an arm
-    // fails here rather than throwing in a consumer's page.
-    [Fact]
-    public void EveryDeclaredAnnouncement_Renders()
-    {
-        foreach (var announcement in Enum.GetValues<NoticeAnnouncement>())
-        {
-            Assert.True(IsShown(RenderNotice(more: p => p.Add(x => x.Announcement, announcement))));
-        }
-    }
-
-    [Fact]
-    public void UndeclaredAnnouncement_Throws()
-    {
-        Assert.Throws<InvalidOperationException>(
-            () => RenderNotice(more: p => p.Add(x => x.Announcement, (NoticeAnnouncement)(-1))));
+        var box = Box(cut).ShouldBe(
+            NoticeKind.Success, NoticeAnnouncement.ByEnclosingRegion, dismissible: false);
+        Assert.True(region.Contains(box.Element));
     }
 
     // ---- Dismissibility ------------------------------------------------
 
-    // The default is the safe one: a caller that says nothing gets a box the
-    // user cannot close.
+    // "Ignores a click" is pinned at its strongest, and behaviourally: a
+    // click on the box or on its content reaches no handler at all. This is
+    // also what stands behind the reader's rule, which reads the same fact
+    // off the test renderer's handler markers without clicking anything.
     [Fact]
-    public void ByDefault_TheNoticeIsNotDismissible()
-    {
-        var cut = Render<Notice>(parameters => parameters
-            .Add(p => p.Kind, NoticeKind.Warning)
-            .AddChildContent(Text));
-
-        Assert.Empty(cut.FindAll("button"));
-        Assert.DoesNotContain("alert-dismissible", Box(cut).ClassList);
-    }
-
-    // "Ignores a click" is pinned at its strongest: the box carries no click
-    // handler at all, so there is nothing for a click to reach.
-    [Fact]
-    public void NonDismissible_RendersNoCloseButton_AndCarriesNoClickHandler()
+    public void NonDismissible_ReactsToNoClick()
     {
         var cut = RenderNotice(NoticeKind.Warning, dismissible: false);
+        var box = Box(cut);
 
-        Assert.Empty(cut.FindAll("button"));
-        Assert.Throws<MissingEventHandlerException>(() => Box(cut).Click());
-        Assert.Throws<MissingEventHandlerException>(
-            () => cut.Find(".bg-notice-content").Click());
-        Assert.Contains(Text, Box(cut).TextContent);
+        Assert.Throws<MissingEventHandlerException>(() => box.Element.Click());
+        Assert.Throws<MissingEventHandlerException>(() => box.Content.Click());
+        Assert.True(IsShown(cut));
     }
 
     [Fact]
-    public void Dismissible_RendersTheCloseButton_WithItsSemantics()
+    public void Dismissible_TheCloseButtonCarriesItsSemantics()
     {
         var cut = RenderNotice(NoticeKind.Warning, dismissible: true);
 
-        Assert.Equal("alert alert-warning alert-dismissible", Box(cut).GetAttribute("class"));
-        var button = cut.Find("div.alert > button.btn-close");
+        var button = Assert.Single(cut.FindAll("button"));
         Assert.Equal("button", button.GetAttribute("type"));
         Assert.Equal("Dismiss this message", button.GetAttribute("aria-label"));
     }
 
-    // The content wrapper is present either way, so a caller's selector does
-    // not change when Dismissible does.
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void Content_RendersInsideTheWrapper(bool dismissible)
-    {
-        var cut = RenderNotice(dismissible: dismissible);
-
-        Assert.Equal(Text, cut.Find("div.alert > div.bg-notice-content").TextContent);
-    }
-
     // ---- The two gestures ----------------------------------------------
 
-    [Fact]
-    public void ClickingTheBox_Dismisses()
+    [Theory]
+    [MemberData(nameof(BothGestures))]
+    public void EitherGesture_Dismisses_AndTheNoticeRendersNothing(NoticeDismissGesture gesture)
     {
         var cut = RenderNotice(dismissible: true);
 
-        Box(cut).Click();
+        Box(cut).Dismiss(gesture);
 
         Assert.False(IsShown(cut));
         Assert.Equal(string.Empty, cut.Markup.Trim());
-    }
-
-    [Fact]
-    public void ClickingTheCloseButton_Dismisses()
-    {
-        var cut = RenderNotice(dismissible: true);
-
-        cut.Find("button.btn-close").Click();
-
-        Assert.False(IsShown(cut));
     }
 
     // ---- Inner interactive content does not dismiss --------------------
@@ -283,20 +198,22 @@ public class NoticeTests : BunitContext
     // test can execute. What can be pinned is that the stylesheet is attached:
     // the compiler stamps a scope attribute on the component's elements only
     // while Notice.razor.css exists, and the stylesheet's selectors need it
-    // on both the box and the wrapper.
+    // on both the box and the content.
     [Fact]
-    public void TheBoxAndTheWrapper_CarryTheScopedStylesheetsAttribute()
+    public void TheBoxAndItsContent_CarryTheScopedStylesheetsAttribute()
     {
-        var cut = RenderNotice(dismissible: true);
+        var box = Box(RenderNotice(dismissible: true));
 
-        var boxScope = Assert.Single(Box(cut).Attributes, a => a.Name.StartsWith("b-"));
-        var wrapperScope = Assert.Single(
-            cut.Find(".bg-notice-content").Attributes, a => a.Name.StartsWith("b-"));
-        Assert.Equal(boxScope.Name, wrapperScope.Name);
+        var boxScope = Assert.Single(box.Element.Attributes, a => a.Name.StartsWith("b-"));
+        var contentScope = Assert.Single(box.Content.Attributes, a => a.Name.StartsWith("b-"));
+        Assert.Equal(boxScope.Name, contentScope.Name);
     }
 
     // ---- Identity and caller attributes --------------------------------
 
+    // Found by id *as* the box: the id is on the notice box itself, not on a
+    // wrapper around it or inside it — and the box carries what was passed
+    // and nothing else.
     [Fact]
     public void IdAndOtherAttributes_LandOnTheBoxItself()
     {
@@ -305,24 +222,26 @@ public class NoticeTests : BunitContext
             .AddUnmatched("style", "white-space: pre-line")
             .AddUnmatched("data-occurrence", "7"));
 
-        // Found by id *as* the box: the id is on the alert element, not on a
-        // wrapper around it or inside it.
-        var box = cut.Find("div.alert#truncationNotice");
-        Assert.Equal("white-space: pre-line", box.GetAttribute("style"));
-        Assert.Equal("7", box.GetAttribute("data-occurrence"));
+        var box = NoticeBox.ById(cut, "truncationNotice").ShouldBe(
+            NoticeKind.Warning, NoticeAnnouncement.Polite, dismissible: true,
+            "id", "style", "data-occurrence");
+        Assert.Equal("white-space: pre-line", box.Element.GetAttribute("style"));
+        Assert.Equal("7", box.Element.GetAttribute("data-occurrence"));
     }
 
-    // Merged after the component's classes, never replacing them — for both
-    // shapes of box.
+    // Merged with the component's classes, never replacing them — for both
+    // shapes of box — and the notice is findable by the caller's marker.
     [Theory]
-    [InlineData(false, "alert alert-warning skipped-notice mt-2")]
-    [InlineData(true, "alert alert-warning alert-dismissible skipped-notice mt-2")]
-    public void ACallersClass_IsMergedWithTheComponentsOwn(bool dismissible, string expected)
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ACallersClass_IsMergedWithTheComponentsOwn(bool dismissible)
     {
         var cut = RenderNotice(NoticeKind.Warning, dismissible, p => p
             .AddUnmatched("class", "  skipped-notice mt-2 "));
 
-        Assert.Equal(expected, Box(cut).GetAttribute("class"));
+        var box = NoticeBox.ByMarkerClass(cut, "skipped-notice").ShouldBe(
+            NoticeKind.Warning, NoticeAnnouncement.Polite, dismissible, "class");
+        Assert.Equal(["skipped-notice", "mt-2"], box.CallerClasses);
     }
 
     [Theory]
@@ -332,7 +251,9 @@ public class NoticeTests : BunitContext
     {
         var cut = RenderNotice(NoticeKind.Success, more: p => p.AddUnmatched("class", blank));
 
-        Assert.Equal("alert alert-success", Box(cut).GetAttribute("class"));
+        var box = Box(cut).ShouldBe(
+            NoticeKind.Success, NoticeAnnouncement.Polite, dismissible: false);
+        Assert.Empty(box.CallerClasses);
     }
 
     // The splat guard. A click handler left on the tag by a migrating caller
@@ -379,7 +300,10 @@ public class NoticeTests : BunitContext
     {
         var cut = RenderNotice(more: p => p.AddUnmatched("aria-describedby", "hint"));
 
-        Assert.Equal("hint", Box(cut).GetAttribute("aria-describedby"));
+        var box = Box(cut).ShouldBe(
+            NoticeKind.Information, NoticeAnnouncement.Polite, dismissible: false,
+            "aria-describedby");
+        Assert.Equal("hint", box.Element.GetAttribute("aria-describedby"));
     }
 
     // ---- Dismissal held by the component -------------------------------
@@ -390,7 +314,7 @@ public class NoticeTests : BunitContext
     public void ComponentHeld_StaysDismissed_AcrossReRenders()
     {
         var cut = RenderNotice(dismissible: true);
-        Box(cut).Click();
+        Box(cut).Dismiss(NoticeDismissGesture.WholeBox);
 
         cut.Render(p => p.Add(x => x.Kind, NoticeKind.Warning));
 
@@ -403,7 +327,7 @@ public class NoticeTests : BunitContext
         // Equal but not the same reference: the comparison is Equals.
         var cut = RenderNotice(dismissible: true,
             more: p => p.Add(x => x.OccurrenceKey, new string('k', 3)));
-        Box(cut).Click();
+        Box(cut).Dismiss(NoticeDismissGesture.WholeBox);
 
         cut.Render(p => p.Add(x => x.OccurrenceKey, new string('k', 3)));
 
@@ -414,12 +338,12 @@ public class NoticeTests : BunitContext
     public void ComponentHeld_ANewOccurrenceKey_ShowsFresh_AndCanBeDismissedAgain()
     {
         var cut = RenderNotice(dismissible: true, more: p => p.Add(x => x.OccurrenceKey, 1));
-        Box(cut).Click();
+        Box(cut).Dismiss(NoticeDismissGesture.WholeBox);
 
         cut.Render(p => p.Add(x => x.OccurrenceKey, 2));
         Assert.True(IsShown(cut));
 
-        Box(cut).Click();
+        Box(cut).Dismiss(NoticeDismissGesture.WholeBox);
         Assert.False(IsShown(cut));
     }
 
@@ -429,7 +353,7 @@ public class NoticeTests : BunitContext
     public void ComponentHeld_AKeyArrivingAfterNone_ShowsFresh()
     {
         var cut = RenderNotice(dismissible: true);
-        Box(cut).Click();
+        Box(cut).Dismiss(NoticeDismissGesture.WholeBox);
 
         cut.Render(p => p.Add(x => x.OccurrenceKey, "first"));
 
@@ -439,14 +363,13 @@ public class NoticeTests : BunitContext
     // ---- Dismissal held by the caller ----------------------------------
 
     [Theory]
-    [InlineData("div.alert")]
-    [InlineData("button.btn-close")]
-    public void CallerHeld_EitherGesture_ReportsTrueExactlyOnce(string target)
+    [MemberData(nameof(BothGestures))]
+    public void CallerHeld_EitherGesture_ReportsTrueExactlyOnce(NoticeDismissGesture gesture)
     {
         var owner = new DismissalOwner();
         var cut = Render<OwnerHost>(p => p.Add(h => h.Owner, owner));
 
-        cut.Find(target).Click();
+        Box(cut).Dismiss(gesture);
 
         Assert.Equal([true], owner.Reports);
         Assert.False(IsShown(cut));
@@ -458,14 +381,13 @@ public class NoticeTests : BunitContext
     // visible: the close button's click travels the box's one handler, and a
     // second handler on the button would report twice here.
     [Theory]
-    [InlineData("div.alert")]
-    [InlineData("button.btn-close")]
-    public void CallerHeld_AnOwnerThatDeclines_KeepsTheNoticeShown(string target)
+    [MemberData(nameof(BothGestures))]
+    public void CallerHeld_AnOwnerThatDeclines_KeepsTheNoticeShown(NoticeDismissGesture gesture)
     {
         var owner = new DismissalOwner { AcceptsReports = false };
         var cut = Render<OwnerHost>(p => p.Add(h => h.Owner, owner));
 
-        cut.Find(target).Click();
+        Box(cut).Dismiss(gesture);
 
         Assert.Equal([true], owner.Reports);
         Assert.True(IsShown(cut));
@@ -478,7 +400,7 @@ public class NoticeTests : BunitContext
     {
         var owner = new DismissalOwner();
         var firstVisit = Render<OwnerHost>(p => p.Add(h => h.Owner, owner));
-        firstVisit.Find("button.btn-close").Click();
+        Box(firstVisit).Dismiss(NoticeDismissGesture.CloseButton);
 
         var secondVisit = Render<OwnerHost>(p => p.Add(h => h.Owner, owner));
 
@@ -492,7 +414,7 @@ public class NoticeTests : BunitContext
     {
         var owner = new DismissalOwner();
         var cut = Render<OwnerHost>(p => p.Add(h => h.Owner, owner));
-        cut.Find("div.alert").Click();
+        Box(cut).Dismiss(NoticeDismissGesture.WholeBox);
         Assert.False(IsShown(cut));
 
         owner.IsDismissed = false;

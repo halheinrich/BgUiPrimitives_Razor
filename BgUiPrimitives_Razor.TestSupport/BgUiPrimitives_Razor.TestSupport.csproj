@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Framework, nullable, implicit usings, warnings-as-errors, and doc-file
+       generation are repo-wide policy — see ..\Directory.Build.props. Only
+       per-project decisions live here.
+
+       What this is: the reader of a rendered <Notice>, shipped for consumers'
+       TEST projects to reference, so that a consumer asserts a notice in the
+       component's vocabulary (NoticeKind, NoticeAnnouncement, dismissible or
+       not) and never names its markup. It is not a product assembly and not a
+       test project: it carries no test SDK, so `dotnet test` does not try to
+       run it. -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!-- Never part of a product, least of all the trimmed WebAssembly publish:
+       it carries bunit, and deliberately declares no IsTrimmable. The
+       declaration below is what enforces that from this side. Every project
+       that can reach a browser publish — BgQuiz's WebAssembly client and each
+       Razor member — declares SupportedPlatform "browser", and in such a
+       project the platform-compatibility analyzer reports any use of this
+       assembly's API as CA1416, an error under the house
+       TreatWarningsAsErrors. A test project declares no browser platform and
+       is unaffected. Pinned by TestSupportPostureTests. -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.Versioning.UnsupportedOSPlatformAttribute">
+      <_Parameter1>browser</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <!-- The dependencies are a decision (INSTRUCTIONS.md, Architecture, "The
+       test-support project"):
+       - bunit, because the two dismiss gestures are actions and only the test
+         renderer can dispatch a click; and the finders take what it renders.
+       - AngleSharp, directly, because the public surface is written in
+         AngleSharp.Dom types (rationale in Directory.Packages.props).
+       - No test framework. A failure is this assembly's own
+         NoticeAssertionException, which every framework reports as a failed
+         test, so a consumer's xunit (or its move to another major, a different
+         package identity that would collide with one pinned here) is its own
+         business. -->
+  <ItemGroup>
+    <PackageReference Include="AngleSharp" />
+    <PackageReference Include="bunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BgUiPrimitives_Razor\BgUiPrimitives_Razor.csproj" />
+  </ItemGroup>
+
+</Project>

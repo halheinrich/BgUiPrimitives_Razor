@@ -23,6 +23,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\BgUiPrimitives_Razor\BgUiPrimitives_Razor.csproj" />
+    <!-- The reader consumers' tests use, used here too: these tests assert a
+         notice through it wherever they assert what it covers, so it is
+         exercised against the real component and a change to the markup
+         breaks one place. -->
+    <ProjectReference Include="..\BgUiPrimitives_Razor.TestSupport\BgUiPrimitives_Razor.TestSupport.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -5,13 +5,18 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- AngleSharp is a first-class dependency of the test project, not a
-         transitive leak: the tests compile against AngleSharp.Dom types that
-         bunit surfaces from its rendered DOM. A compile-time dependency
+    <!-- AngleSharp is a first-class dependency of the test and test-support
+         projects, not a transitive leak: both compile against AngleSharp.Dom
+         types that bunit surfaces from its rendered DOM, and the test-support
+         project's public surface is written in them. A compile-time dependency
          supplied only transitively is a latent break — bunit could retarget
-         its DOM layer and the tests would stop compiling — so it is declared
-         here and promoted to a direct PackageReference in the test csproj. A
-         dependency audit must keep it. -->
+         its DOM layer and they would stop compiling — so it is declared here
+         and promoted to a direct PackageReference in each csproj. A dependency
+         audit must keep it.
+
+         AngleSharp and bunit are also what the test-support project hands on
+         to every consumer's test project that references it: a bump here is a
+         bump for them, to be coordinated through the umbrella. -->
     <PackageVersion Include="AngleSharp" Version="1.6.0" />
     <PackageVersion Include="bunit" Version="2.8.6" />
     <PackageVersion Include="coverlet.collector" Version="10.0.1" />

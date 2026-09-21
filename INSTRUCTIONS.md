@@ -6,7 +6,8 @@
 
 ## Stack
 
-C# / .NET 10 / Razor class library (`Microsoft.NET.Sdk.Razor`) / xUnit + bUnit.
+C# / .NET 10 / Razor class library (`Microsoft.NET.Sdk.Razor`) / a
+test-support library for consumers (bUnit + AngleSharp) / xUnit + bUnit.
 Visual Studio 2026 on Windows.
 
 ## Solution
@@ -31,7 +32,7 @@ the host's own scoped-CSS bundle.
 
 ## Layout
 
-The library and its tests, under `BgUiPrimitives_Razor.slnx`, governed by the repo-root
+The library, its test support and its tests, under `BgUiPrimitives_Razor.slnx`, governed by the repo-root
 `Directory.Build.props` (TFM, `TreatWarningsAsErrors`, XML doc generation)
 and `Directory.Packages.props` (Central Package Management).
 
@@ -44,10 +45,26 @@ carries one `@using` however many primitives the library grows. Its occupant:
   Bootstrap lacks in `Notice.razor.css`); `NoticeKind` and
   `NoticeAnnouncement`, the user-level selectors its callers name.
 
+**`BgUiPrimitives_Razor.TestSupport/`** — shipped for **consumers' test
+projects** to reference, and for nothing else. It reads a rendered notice back
+into the component's vocabulary, so that a consumer's test says what a notice
+*is* — `NoticeKind`, `NoticeAnnouncement`, dismissible or not, and the
+attributes its call site passed — and never names a class, a role or a
+selector of the component's. Namespace `BgUiPrimitives_Razor.TestSupport`.
+Its occupants: `NoticeBox`, the reader; `NoticeDismissGesture`, the two
+gestures as a selector; `NoticeAssertionException`, what a failure throws.
+References bunit and AngleSharp and no test framework. Not a product
+assembly, not trimmable, and declared unsupported in the browser (see
+Architecture, The test-support project).
+
 **`BgUiPrimitives_Razor.Tests/`** — xUnit + bUnit. Renders the real component
 and drives it through real DOM events; the caller-held dismissal path is
 exercised through a real parent component, not by re-setting parameters from
-the test. Also holds the trim-posture pin.
+the test. `NoticeTests` asserts through `NoticeBox` wherever the reader
+covers what is asserted, so the reader is exercised against the real
+component; `NoticeBoxTests` pins the reader against literal markup — the one
+test file that spells a notice out — and shows every rule it enforces
+failing. Also holds the trim-posture pin and `TestSupportPostureTests`.
 
 ## Architecture
 
@@ -182,10 +199,88 @@ assembly metadata for `IsTrimmable`, and the project file itself (linked into
 the test output) for the analyzer switch, which leaves no trace in the
 assembly.
 
+### The test-support project
+
+**Why it exists.** A green build proves nothing about a `<Notice>` tag. A
+parameter name the component does not have — misspelt, or renamed under the
+caller — compiles clean, is splatted onto the box as a plain attribute, and
+the real parameter silently takes its default: polite, not dismissible
+(measured in two adopters, halheinrich/backgammon#248). Each adopter answered
+with a test helper of its own, and each helper knew this component's
+internals. The producer owns that knowledge, so the producer ships the reader.
+
+**Parse, then compare.** A `NoticeBox` cannot be obtained for anything but a
+well-formed notice: every way in reads the whole box and throws unless it is
+what the component renders. The structural rules — each component class
+exactly once; the announcement on the content and nowhere else, and no
+live-region attribute anywhere in the box; the close button outside the
+content; class, close button and box click handler all present or all absent;
+never a click handler on the content or on the close button — are therefore
+not something a consumer
+can forget to assert. `ShouldBe` then compares what was read with what the
+call site asked for, and states everything at once with nothing optional,
+because the failure it exists for changes a value the test did not think to
+check.
+
+**"Reacts to no click" is read, not clicked.** The reader looks for the test
+renderer's click-handler marker on the box and the content rather than
+clicking and expecting `MissingEventHandlerException`. A click bubbles: inside
+a consumer's page it would reach — and run — a handler on any ancestor, so
+the clicking form both fails falsely there and has side effects in an
+assertion. The marker is what bUnit dispatches on, so its absence is the same
+fact; `NoticeTests.NonDismissible_ReactsToNoClick` pins the behaviour itself
+against the real component.
+
+**Finding takes the caller's identifiers, never the component's.** `ById` and
+`ByMarkerClass` take what the call site wrote on the tag, and `ByMarkerClass`
+refuses a class the component owns. `From` admits an element the test found
+some other way of its own. `AllIn` is how a test says "no notice is shown"
+without knowing what one looks like. Whether an *element with the caller's
+id* exists is the caller's own question and needs no helper
+(`cut.FindAll("#runError")`).
+
+**An independent reader.** The classes, roles and markers are restated in
+`NoticeBox` rather than shared with `Notice` through `InternalsVisibleTo`. A
+reader that took its expectations from the implementation would agree with
+whatever the implementation did, and the product assembly would name a test
+assembly as a friend. The restatement is held honest from both sides:
+`NoticeTests` renders the real component through the reader for every
+combination, and `NoticeBoxTests` pins the reader against literal markup. A
+change to the rendered shape is made in `Notice`, in `NoticeBox`, and in
+`NoticeBoxTests`' literals — and in no consumer.
+
+**Dependencies, decided.** bunit, because a gesture is an action and only the
+test renderer can dispatch a click, and because the finders take what it
+renders; AngleSharp directly, because the public surface is written in its
+types. **No test framework:** a failure is `NoticeAssertionException`, this
+assembly's own, which every framework reports as a failed test with its
+message. An xunit reference here would ride into every consumer's test
+project, and xunit's next major is a different package identity declaring the
+same `Xunit.Assert` — a consumer moving to it would collide with the one
+pinned here. Consumers reach this project by `ProjectReference`, so the bunit
+and AngleSharp versions in this repository's `Directory.Packages.props` are
+the floor for theirs: a bump here is coordinated through the umbrella.
+
+**Never in a product.** The assembly is declared
+`[UnsupportedOSPlatform("browser")]` (in its project file). Every project
+that can reach a browser publish — BgQuiz's WebAssembly client and each Razor
+member — declares `SupportedPlatform` `browser`, and in such a project the
+platform-compatibility analyzer reports any use of this assembly as `CA1416`,
+an error under the house `TreatWarningsAsErrors` (measured in a scratch
+project when introduced: error with the browser platform declared, clean
+without). Test projects declare no browser platform and are unaffected.
+`TestSupportPostureTests` pins the declaration, that the assembly claims no
+`IsTrimmable`, that it references no test framework, and that the library
+references no project. **Stated limit:** a server host declares no browser
+platform and is not stopped by the analyzer; that a member's non-test project
+never references this one is a claim about other repositories, and is the
+umbrella's to gate.
+
 ## Public API
 
 Namespace `BgUiPrimitives_Razor`. Consumers add `@using BgUiPrimitives_Razor`
-to `_Imports.razor`.
+to `_Imports.razor`. The test-support surface, in
+`BgUiPrimitives_Razor.TestSupport`, is at the end of this section.
 
 ### `NoticeKind`
 
@@ -284,6 +379,10 @@ child of the box, present in every shape. The close button is
 `button.btn-close`, a direct child of the box and the region's sibling. When
 dismissed, the component renders nothing.
 
+This shape is documented for hosts, stylesheets and this repository. **A
+consumer's test does not read it:** it asserts through `NoticeBox` (below),
+which is the shape's one reader outside the component.
+
 ### Call shapes
 
 A gate reason or live indicator — not dismissible, nothing else to say:
@@ -345,7 +444,152 @@ A notice whose occurrence outlives the page — the owner holds the dismissal:
   Razor member. The host's root document must link that bundle. A host that
   has never had scoped CSS of its own may not link it yet.
 
+### Test support — `BgUiPrimitives_Razor.TestSupport`
+
+For a consumer's **test** project only, by `ProjectReference` to
+`BgUiPrimitives_Razor.TestSupport/BgUiPrimitives_Razor.TestSupport.csproj`.
+It brings bunit and AngleSharp at this repository's versions and no test
+framework.
+
+```csharp
+public sealed class NoticeBox
+{
+    // Finding — each reads the whole box and throws unless it is a well-formed notice.
+    public static NoticeBox From(IElement element);
+    public static NoticeBox ById(IRenderedComponent<IComponent> rendered, string id);
+    public static NoticeBox ByMarkerClass(IRenderedComponent<IComponent> rendered, string markerClass);
+    public static IReadOnlyList<NoticeBox> AllIn(IRenderedComponent<IComponent> rendered);
+
+    // What was read.
+    public IElement Element { get; }                        // the box: the caller's id, style, data-*
+    public IElement Content { get; }                        // what the caller put inside, nothing else
+    public NoticeKind Kind { get; }
+    public NoticeAnnouncement Announcement { get; }
+    public bool Dismissible { get; }
+    public IReadOnlyList<string> CallerClasses { get; }     // without the component's own
+    public IReadOnlyList<string> CallerAttributes { get; }  // names; "class" only if one was passed
+
+    // Asserting and acting.
+    public NoticeBox ShouldBe(NoticeKind kind, NoticeAnnouncement announcement,
+                              bool dismissible, params string[] callerAttributes);
+    public void Dismiss(NoticeDismissGesture gesture);
+}
+
+public enum NoticeDismissGesture { CloseButton, WholeBox }
+
+public sealed class NoticeAssertionException : Exception { }   // raised only by this assembly
+```
+
+Contracts:
+
+- **Every `NoticeBox` is a well-formed notice.** `From`, `ById`,
+  `ByMarkerClass` and `AllIn` throw `NoticeAssertionException` on an element
+  that is not a notice box (the identifier is on something else, or the box
+  is hand-written) and on a box that breaks a structural rule: the
+  component's classes each exactly once (a call site that still passes
+  `alert` or an `alert-*` class fails here); the announcement on the content
+  and nowhere else, with no `aria-live`, `aria-atomic` or `aria-relevant` on
+  any element and no live region nested in the content; the close button
+  outside the content; dismissible class, close button and box click handler
+  all present or all absent; no click handler on the content or on the close
+  button.
+- **`ById` / `ByMarkerClass`** — exactly one element must carry the
+  identifier. `ByMarkerClass` takes one class name of the call site's own and
+  throws `ArgumentException` for a class the component owns. Any
+  `IRenderedComponent<T>` converts to the parameter type.
+- **`AllIn`** — every notice, in document order; empty when none is shown.
+  Hand-written alerts are not notices and are not returned.
+- **`ShouldBe`** — all of it, every time: the call site's `Kind`, its
+  `Announcement` (`Polite` if it names none), its `Dismissible` (`false` if it
+  names none), and the names of the non-parameter attributes on the tag, as
+  written — `"id"`, `"class"`, `"style"`, `"data-…"`, `"onmouseover"` for a
+  bound `@onmouseover`. The box must carry exactly those: one it carries that
+  was not named is the silent-splat trap, and one named that it does not carry
+  was lost. Names are matched case-insensitively. The scope attribute, the
+  test renderer's event markers and the component's own `class` are the
+  reader's to know and are never named. Every difference is stated in one
+  message, with the rendered box. Returns the box, for chaining.
+- **`Dismiss`** — a real click through the test renderer on the close button
+  or the box. Throws `NoticeAssertionException` on a notice that is not
+  dismissible. Asserts nothing about what follows — a caller-held dismissal
+  may decline.
+- **A `NoticeBox` is a reading of one render.** After `Dismiss`, or anything
+  else that re-renders, find the notice again.
+- **Values are the caller's to read** — `box.Element.GetAttribute("style")`,
+  `box.Content.TextContent`, `box.CallerClasses`.
+
+Call shapes, in a consumer's test. A dismissible assertive error, with both
+gestures as a theory:
+
+```csharp
+public static TheoryData<NoticeDismissGesture> BothGestures =>
+    new(Enum.GetValues<NoticeDismissGesture>());
+
+[Theory]
+[MemberData(nameof(BothGestures))]
+public async Task SaveError_IsADismissibleAssertiveError_AndDismisses(NoticeDismissGesture gesture)
+{
+    var cut = await RenderWithARefusedSaveAsync();
+
+    // <Notice id="filterSaveError" class="mb-4" style="max-width:800px"
+    //         Kind="NoticeKind.Error" Announcement="NoticeAnnouncement.Assertive"
+    //         Dismissible="true" …>
+    var box = NoticeBox.ById(cut, "filterSaveError").ShouldBe(
+        NoticeKind.Error, NoticeAnnouncement.Assertive, dismissible: true,
+        "id", "class", "style");
+    Assert.Equal(["mb-4"], box.CallerClasses);
+
+    box.Dismiss(gesture);
+
+    Assert.Empty(cut.FindAll("#filterSaveError"));
+}
+```
+
+A notice announced by its enclosing region — no live-region role or attribute
+anywhere in the box is part of what `ByEnclosingRegion` asserts; the region
+itself is the caller's element and the caller's to check:
+
+```csharp
+// <div id="loadedNotice" role="status">
+//     <Notice Kind="NoticeKind.Success" Announcement="NoticeAnnouncement.ByEnclosingRegion"
+//             class="mt-3 mb-0">…</Notice>
+// </div>
+var region = cut.Find("#loadedNotice");
+Assert.Equal("status", region.GetAttribute("role"));
+
+var box = Assert.Single(NoticeBox.AllIn(cut)).ShouldBe(
+    NoticeKind.Success, NoticeAnnouncement.ByEnclosingRegion, dismissible: false,
+    "class");
+Assert.True(region.Contains(box.Element));
+```
+
+A gate reason that cannot be closed needs nothing more than `dismissible:
+false` — that the box and its content react to no click is part of what it
+means.
+
 ## Pitfalls
+
+- **A consumer test that names `bg-notice-content`, `btn-close`, an `alert-*`
+  class or a role is a defect — use `NoticeBox`.** That includes a selector
+  (`#id > .bg-notice-content`, `button.btn-close`), a class string
+  (`"alert-danger"`), a role string (`"status"`), a click on the close button
+  by selector, and a hand-rolled list of the attributes the renderer stamps.
+  Each is this component's internals restated where a change here cannot
+  reach it. The caller's own `id`, marker classes and attribute values are
+  not the component's and are fine.
+- **The test-support project is for test projects.** No product project —
+  no Razor member, no host, no WebAssembly client — may reference it: it
+  carries bunit. A project that declares the browser platform fails to build
+  with `CA1416` if it uses it; a server host is not stopped by anything in
+  this repository, so do not try.
+- **Assert every notice with `ShouldBe`, including the ones "obviously
+  right".** The silent-splat trap changes nothing the compiler or a casual
+  test sees. And write `ShouldBe`'s arguments from what the call site is
+  *meant* to say, not from what it renders.
+- **Changing what `Notice` renders** means changing `NoticeBox` and the
+  literal boxes in `NoticeBoxTests` in the same commit. A new structural rule
+  in `NoticeBox` needs its failing case there too: an assertion never seen
+  failing is unproven.
 
 - **Migrating a hand-written box.** Delete the old `role="…"`, `aria-live`,
   `@onclick` and `@onclick:stopPropagation` with the markup they sat on; the
@@ -360,9 +604,8 @@ A notice whose occurrence outlives the page — the owner holds the dismissal:
   spacing classes.
 - **The role is not on the box.** A test or selector that reads `role` on the
   element found by the notice's id — `box.GetAttribute("role")`,
-  `div.alert-warning[role=alert]` — finds nothing. Read it on the box's
-  `div.bg-notice-content` child (`#id > .bg-notice-content`,
-  `div.alert-warning > [role=alert]`).
+  `div.alert-warning[role=alert]` — finds nothing. A test does not read the
+  role at all: it states the `NoticeAnnouncement` to `NoticeBox.ShouldBe`.
 - **`ByEnclosingRegion` is a claim the component cannot check.** It renders
   no role on the caller's word that a mounted live region encloses the
   notice. Used with no such region, the notice is announced by nobody. The
@@ -402,7 +645,10 @@ A notice whose occurrence outlives the page — the owner holds the dismissal:
   check in a real browser that a click on plain text targets the box and a
   click on an inner link or button targets that element.
 - **Adding a `NoticeKind` or `NoticeAnnouncement` value** means adding its arm
-  to the component's switch; an enum value without one throws at render.
+  to the component's switch — an enum value without one throws at render —
+  and its reading to `NoticeBox`, without which
+  `NoticeBoxTests.EveryDeclaredKind_AndAnnouncement_IsReadBackFromTheRealComponent`
+  fails.
 - **Do not move the role back onto the box, or the close button into the
   wrapper.** Either puts the button's accessible name inside an atomic live
   region, so every dismissible notice would read "Dismiss this message,
@@ -414,4 +660,6 @@ A notice whose occurrence outlives the page — the owner holds the dismissal:
 ## Subproject-internal next steps
 
 None open. Adoption of `Notice` by `XgFilter_Razor`, `ExtractFromXgToCsv` and
-`BgQuiz_Blazor` is tracked in the umbrella (halheinrich/backgammon#248).
+`BgQuiz_Blazor` — and with it the replacement of the first two's own notice
+test helpers by `NoticeBox` — is tracked in the umbrella
+(halheinrich/backgammon#248).
