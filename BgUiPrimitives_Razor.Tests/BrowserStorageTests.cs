@@ -16,7 +16,12 @@ namespace BgUiPrimitives_Razor.Tests;
 // read before a write" holds in every test here, not only in the ones that
 // name it. The wire is restated below (StorageObject), never taken from the
 // implementation: a test that asked the code under test which identifier to
-// expect would agree with whatever it did.
+// expect would agree with whatever it did. Nor is it taken from
+// BrowserStoragePlan, the test-support planner that restates the same wire
+// for consumers: these tests are the independent statement of the protocol
+// that the planner is held to, so they plan with bUnit's own Setup and
+// SetupVoid and never through the planner. (The planner offers no
+// identifier to take; TestSupportPostureTests pins that.)
 public class BrowserStorageTests : BunitContext
 {
     private const string Key = "bg.test.key";

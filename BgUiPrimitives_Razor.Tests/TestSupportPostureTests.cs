@@ -53,6 +53,35 @@ public class TestSupportPostureTests
         Assert.Empty(XDocument.Load(projectFile).Descendants("ProjectReference"));
     }
 
+    // The planner restates BrowserStorage's interop identifiers privately and
+    // offers none of them. A test that took its expected identifiers from the
+    // planner would agree with whatever the planner said: BrowserStorageTests,
+    // which is the independent statement the planner is held to, and a
+    // consumer's test, which must not spell the wire at all.
+    //
+    // Stated limit: a structural proxy. It finds a public static string —
+    // constant, field, property or method — anywhere in the assembly; it does
+    // not see a string handed out another way, such as an instance member or
+    // a collection.
+    [Fact]
+    public void TheTestSupportAssembly_OffersNoStaticString_ForATestToTakeAnIdentifierFrom()
+    {
+        const BindingFlags PublicStatic = BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly;
+
+        var offered = typeof(NoticeBox).Assembly.GetExportedTypes()
+            .SelectMany(type => type.GetMembers(PublicStatic))
+            .Where(member => member switch
+            {
+                FieldInfo field => field.FieldType == typeof(string),
+                PropertyInfo property => property.PropertyType == typeof(string),
+                MethodInfo method => !method.IsSpecialName && method.ReturnType == typeof(string),
+                _ => false,
+            })
+            .Select(member => $"{member.DeclaringType!.Name}.{member.Name}");
+
+        Assert.Empty(offered);
+    }
+
     // No test framework rides along into a consumer's test project: a failure
     // is this assembly's own exception, which every framework reports.
     [Fact]
