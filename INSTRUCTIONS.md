@@ -54,13 +54,26 @@ carries one `@using` however many primitives the library grows. Its occupants:
   (`BrowserStorageServiceCollectionExtensions`), the host's registration.
 
 **`BgUiPrimitives_Razor.TestSupport/`** — shipped for **consumers' test
-projects** to reference, and for nothing else. It reads a rendered notice back
-into the component's vocabulary, so that a consumer's test says what a notice
-*is* — `NoticeKind`, `NoticeAnnouncement`, dismissible or not, and the
-attributes its call site passed — and never names a class, a role or a
-selector of the component's. Namespace `BgUiPrimitives_Razor.TestSupport`.
-Its occupants: `NoticeBox`, the reader; `NoticeDismissGesture`, the two
-gestures as a selector; `NoticeAssertionException`, what a failure throws.
+projects** to reference, and for nothing else. It translates between the
+library's vocabulary and what the library does in the test renderer, in both
+directions, so that a consumer's test never names the library's internals.
+Namespace `BgUiPrimitives_Razor.TestSupport`. Its occupants:
+
+- **The notice reader** — `NoticeBox` reads a rendered notice back into the
+  component's vocabulary, so that a test says what a notice *is* —
+  `NoticeKind`, `NoticeAnnouncement`, dismissible or not, and the attributes
+  its call site passed — and never names a class, a role or a selector of the
+  component's. `NoticeDismissGesture`, the two gestures as a selector;
+  `NoticeAssertionException`, what a failure throws.
+- **The storage planner** — `BrowserStoragePlan` plans the browser's answers
+  to the real `BrowserStorage` in the accessor's vocabulary — area, key,
+  stored, absent, refused, succeeded — and verifies the calls afterwards, so
+  that a test never names an interop identifier.
+  `BrowserStorageReadAnswer` and `BrowserStorageWriteAnswer`, the answers;
+  `BrowserStorageExpectation`, a planned call; `BrowserStorageHeldRead` and
+  `BrowserStorageHeldWrite`, a planned call the test holds pending and
+  releases; `BrowserStorageAssertionException`, what a failure throws.
+
 References bunit and AngleSharp and no test framework. Not a product
 assembly, not trimmable, and declared unsupported in the browser (see
 Architecture, The test-support project).
@@ -76,8 +89,10 @@ failing. `BrowserStorageTests` drives the storage access through bUnit's JS
 interop in strict mode: every browser answer is planned for the exact
 identifier and arguments an operation must send, so a call nobody planned
 fails, and the wire is restated there rather than borrowed from the
-implementation. `BrowserStorageRegistrationTests` reads the registration back
-from the service collection. Also holds the trim-posture pin and
+implementation or from the planner. `BrowserStoragePlanTests` runs the real
+accessor through `BrowserStoragePlan` and shows every rule the planner
+enforces failing. `BrowserStorageRegistrationTests` reads the registration
+back from the service collection. Also holds the trim-posture pin and
 `TestSupportPostureTests`.
 
 ## Architecture
@@ -372,14 +387,15 @@ change to the rendered shape is made in `Notice`, in `NoticeBox`, and in
 `NoticeBoxTests`' literals — and in no consumer.
 
 **Dependencies, decided.** bunit, because a gesture is an action and only the
-test renderer can dispatch a click, and because the finders take what it
-renders; AngleSharp directly, because the public surface is written in its
-types. **No test framework:** a failure is `NoticeAssertionException`, this
-assembly's own, which every framework reports as a failed test with its
-message. An xunit reference here would ride into every consumer's test
-project, and xunit's next major is a different package identity declaring the
-same `Xunit.Assert` — a consumer moving to it would collide with the one
-pinned here. Consumers reach this project by `ProjectReference`, so the bunit
+test renderer can dispatch a click, because the finders take what it
+renders, and because the storage planner answers calls made through its JS
+interop; AngleSharp directly, because the public surface is written in its
+types. **No test framework:** a failure is `NoticeAssertionException` or
+`BrowserStorageAssertionException`, this assembly's own, which every
+framework reports as a failed test with its message. An xunit reference
+here would ride into every consumer's test project, and xunit's next major
+is a different package identity declaring the same `Xunit.Assert` — a
+consumer moving to it would collide with the one pinned here. Consumers reach this project by `ProjectReference`, so the bunit
 and AngleSharp versions in this repository's `Directory.Packages.props` are
 the floor for theirs: a bump here is coordinated through the umbrella.
 
@@ -397,6 +413,111 @@ references no project. **Stated limit:** a server host declares no browser
 platform and is not stopped by the analyzer; that a member's non-test project
 never references this one is a claim about other repositories, and is the
 umbrella's to gate.
+
+### The storage planner
+
+**Why it exists.** `BrowserStorage` reaches the browser through interop
+calls, and a bUnit test of code that stores anything must answer them.
+Spelled in each consumer's tests, those calls would be this library's
+interop representation restated in three repositories, where a change here
+cannot reach it (halheinrich/backgammon#377). The library owns the
+representation, so it owns the test-side translation too. A consumer's test
+states areas, keys and answers in the accessor's vocabulary, and
+`BrowserStoragePlan` turns them into answers to the real calls.
+
+**The real accessor runs.** The plan is a pair of bUnit invocation handlers,
+registered with `BunitJSInterop.AddInvocationHandler`. They answer the calls
+the real `BrowserStorage` makes. Nothing stands in for the accessor — no fake
+`IJSRuntime`, no interface over it — so a consumer's test sees the accessor's
+own results. A refusal reaches the accessor as a `JSException`, as a
+browser's does, so the accessor's catch boundary runs in every consumer test
+that plans one.
+
+**Every storage call is the plan's, and nothing else is.**
+- The handlers match the six storage identifiers and no others. Every other
+  interop plan, and bUnit's invocation record, is left as it was.
+- They are not catch-all handlers. bUnit tries every non-catch-all handler
+  before any catch-all (`BunitJSInterop.TryGetHandlerFor`,
+  `src/bunit/JSInterop/BunitJSInterop.cs` at bUnit's tag `v2.8.6`), so a
+  catch-all the test registers for its own calls never takes a storage call
+  from the plan.
+- The plan answers storage calls in either `JSRuntimeMode`. An unexpected
+  call fails at the call with `BrowserStorageAssertionException`. That is not
+  a `JSException`, so the accessor propagates it rather than reading it as a
+  refusal. The call is also recorded, so `Verify` reports it even when the
+  code under test caught the exception.
+- `Verify` also reads bUnit's record of every invocation, and reports any
+  storage call the plan did not answer. One comes from a handler the test
+  registered itself, which spells an identifier; another is a call with a
+  result type no operation has.
+- One plan per `BunitJSInterop`. A second would take every call from the
+  first, so `On` refuses it.
+
+**Registration: `BrowserStoragePlan.On(JSInterop)`.** A static factory, not a
+constructor, because creating a plan registers handlers on the test's
+runtime, a side effect a constructor would hide. It takes the
+`BunitJSInterop`, the narrowest thing it uses, rather than the whole
+`BunitContext`. The test registers `BrowserStorage` itself, as a host does
+(`Services.AddBrowserStorage()`): the plan answers the runtime and does not
+reach into the service collection.
+
+**Matched, not sequenced.** A call is answered by the earliest-declared
+expectation, not yet used up, with the same operation, area, key and — for a
+write — value. So successive answers for one call are declared in the order
+they are given: a refusal and then a success, or two overlapping reads of
+one key. Calls to different keys, areas or values may arrive in any order.
+Writes match by value, so two saves of different values are told apart
+however they interleave. Order is checked only where a test names a
+sequence with `RequireOrder`.
+
+**Each answer is declared with its call.** Each `Expect…` method takes its
+answer as an argument. A fluent builder was rejected because it allows a
+half-declared expectation, `ExpectRead(…)` with its answer forgotten. The
+answer types are classes with fixed instances, not enums, so no answer
+outside the browser's own can be written. `Stored(null)` throws: a key with
+no item is `Absent`.
+
+**Held calls are reached, pending, then released.** `ExpectHeld…` returns a
+handle. Once the code under test makes the call, it stays pending until the
+test calls `Release` with an answer. Each held expectation is its own call,
+so overlapping calls are told apart and may complete in any order, the older
+after the newer. bUnit's own handler can do none of this
+(`src/bunit/JSInterop/InvocationHandlers/JSRuntimeInvocationHandlerBase{TResult}.cs`
+at bUnit's tag `v2.8.6`, the version this repository pins):
+- it answers every invocation it matches from one shared pending task;
+- it fails that task after `BunitContext.DefaultWaitTimeout`.
+
+A held call has no timeout, deliberately. It is pending for as long as the
+test says, and a timer would make the result depend on how fast the test
+ran. Its completion runs the awaiting code's continuation asynchronously,
+never inside `Release`. The test awaits the operation, or waits for the
+render that follows it.
+
+**Verified explicitly.** `Verify` is a call the test makes, as `ShouldBe` is.
+Verifying at disposal was rejected: it would throw from `Dispose`, and it
+would run for a test that had already failed. A held call that was reached
+counts as made, released or not. Whether the code under test then completed
+is the test's own assertion.
+
+**An independent restatement.** The identifiers are restated in
+`BrowserStoragePlan`, not shared with `BrowserStorage` through
+`InternalsVisibleTo`, for `NoticeBox`'s reason. Three places spell the wire,
+each for its own purpose:
+- `BrowserStorage` makes the calls;
+- `BrowserStoragePlan` answers them;
+- `BrowserStorageTests` pins them with literals of its own, and takes
+  nothing from the plan it would otherwise be validating. The plan exposes
+  no identifier for it to take.
+
+`BrowserStoragePlanTests` holds the plan to the accessor by running the real
+one through it. A change to how the accessor reaches the browser is made in
+all three places and in no consumer.
+
+**What it is not.** It is no simulated storage: a plan holds no items, and a
+write does not make a later read stored. Each answer is the test's
+statement of what the browser says. Nor does it need production API of its
+own: it reaches the accessor only through the interop calls the accessor
+already makes.
 
 ## Public API
 
@@ -600,7 +721,11 @@ Contracts:
   - `WriteAsync` calls `setItem(key, value)`;
   - `RemoveAsync` calls `removeItem(key)`.
 
-  Nothing else is called, before or after.
+  Nothing else is called, before or after. These calls are documented for
+  this repository: they are the library's implementation, restated in
+  `BrowserStoragePlan` and pinned by `BrowserStorageTests`. **A consumer's
+  test does not repeat them.** It plans storage through `BrowserStoragePlan`
+  (below), which answers them.
 - **A read** is exactly one of `IsStored`, `IsAbsent` and `IsRefused`.
   - `IsStored` with `Value == ""` is an item holding the empty string. Only
     `IsAbsent` means there is no item.
@@ -674,6 +799,8 @@ For a consumer's **test** project only, by `ProjectReference` to
 `BgUiPrimitives_Razor.TestSupport/BgUiPrimitives_Razor.TestSupport.csproj`.
 It brings bunit and AngleSharp at this repository's versions and no test
 framework.
+
+#### The notice reader
 
 ```csharp
 public sealed class NoticeBox
@@ -790,6 +917,173 @@ Assert.True(region.Contains(box.Element));
 A gate reason that cannot be closed needs nothing more than `dismissible:
 false` — that the box and its content react to no click is part of what it
 means.
+
+#### The storage planner
+
+```csharp
+public sealed class BrowserStoragePlan
+{
+    public static BrowserStoragePlan On(BunitJSInterop jsInterop);
+
+    // Answered at the call.
+    public BrowserStorageExpectation ExpectRead(BrowserStorageArea area, string key,
+                                                BrowserStorageReadAnswer answer, int times = 1);
+    public BrowserStorageExpectation ExpectWrite(BrowserStorageArea area, string key, string value,
+                                                 BrowserStorageWriteAnswer answer, int times = 1);
+    public BrowserStorageExpectation ExpectRemove(BrowserStorageArea area, string key,
+                                                  BrowserStorageWriteAnswer answer, int times = 1);
+
+    // Held pending until the test releases them.
+    public BrowserStorageHeldRead ExpectHeldRead(BrowserStorageArea area, string key);
+    public BrowserStorageHeldWrite ExpectHeldWrite(BrowserStorageArea area, string key, string value);
+    public BrowserStorageHeldWrite ExpectHeldRemove(BrowserStorageArea area, string key);
+
+    public void RequireOrder(params BrowserStorageExpectation[] sequence);
+    public void Verify();
+}
+
+public sealed class BrowserStorageReadAnswer
+{
+    public static BrowserStorageReadAnswer Stored(string value);   // the empty string included
+    public static BrowserStorageReadAnswer Absent { get; }
+    public static BrowserStorageReadAnswer Refused { get; }
+}
+
+public sealed class BrowserStorageWriteAnswer                    // a write or a removal
+{
+    public static BrowserStorageWriteAnswer Succeeded { get; }
+    public static BrowserStorageWriteAnswer Refused { get; }
+}
+
+public class BrowserStorageExpectation { }                       // created only by a plan
+
+public sealed class BrowserStorageHeldRead : BrowserStorageExpectation
+{
+    public bool IsReached { get; }
+    public void Release(BrowserStorageReadAnswer answer);
+}
+
+public sealed class BrowserStorageHeldWrite : BrowserStorageExpectation   // a write or a removal
+{
+    public bool IsReached { get; }
+    public void Release(BrowserStorageWriteAnswer answer);
+}
+
+public sealed class BrowserStorageAssertionException : Exception { }      // raised only by this assembly
+```
+
+Each type's `ToString` describes it, for failure messages.
+
+Contracts:
+
+- **`On`** — puts the plan on the test's `JSInterop`. From then on it answers
+  every storage call made there, in either `JSRuntimeMode`, and no other
+  call. A second plan on the same `JSInterop` throws
+  `InvalidOperationException`. The test registers `BrowserStorage` as a host
+  does (`Services.AddBrowserStorage()`), so the real accessor runs over that
+  runtime.
+- **`Expect…`** — each declares one call in the accessor's terms and the
+  browser's answer to it. The answer is given at the call: the accessor's
+  operation has completed when it returns. `times` (default 1) declares that
+  many identical calls, each answered alike. An undeclared area, a null key,
+  value or answer, or a `times` below one throws at once and declares
+  nothing. A key or value may be any other string, the empty string
+  included.
+- **Matching.** A call is answered by the earliest-declared expectation, not
+  yet used up, with the same operation, area, key and — for a write — value.
+  Successive answers for one call are given in the order declared; calls that
+  differ in any of those respects keep no order between them.
+- **An unexpected call** is one that matches no expectation: nothing declared
+  for it, one more than declared, or a different operation, area, key or
+  written value. It fails at the call with `BrowserStorageAssertionException`,
+  which the accessor propagates, and it is recorded for `Verify`.
+- **A refusal** reaches the accessor as a `JSException` raised for that one
+  call, so the accessor's result is refused. Each refused call gets its own
+  exception.
+- **`RequireOrder`** — every call matched to an earlier expectation in the
+  sequence comes before every call matched to a later one. It takes two or
+  more distinct expectations of this plan, and throws `ArgumentException`
+  otherwise. Expectations named in no sequence keep no order.
+- **`Verify`** — throws `BrowserStorageAssertionException` if any of these
+  happened:
+  - an unexpected call, whether or not the code under test caught its
+    failure;
+  - an expectation made fewer times than declared;
+  - a required order broken;
+  - a storage call in bUnit's record that the plan did not answer.
+
+  The message states every difference, and the storage calls made in order.
+  A reached held call counts as made, released or not. `Verify` changes
+  nothing and may be called more than once.
+- **Held calls** — each is one call. `IsReached` becomes true when the code
+  under test makes it, and the operation is then pending until `Release`.
+  `Release` before the call is reached throws
+  `BrowserStorageAssertionException`, and a second `Release` throws
+  `InvalidOperationException`. The awaiting code resumes asynchronously,
+  after `Release` returns. There is no timeout: an unreleased held call never
+  completes.
+- **Nothing else on the `JSInterop` changes.** Other interop plans answer
+  their own calls, a test's catch-all included, and bUnit's invocation
+  record keeps every call.
+
+Call shapes, in a consumer's test. The store's key is the store's own to
+name; the interop calls are not:
+
+```csharp
+public class FilterStoreTests : BunitContext
+{
+    private const string StorageKey = "bg.filter";
+
+    private readonly BrowserStoragePlan _storage;
+
+    public FilterStoreTests()
+    {
+        Services.AddBrowserStorage();
+        _storage = BrowserStoragePlan.On(JSInterop);
+    }
+
+    [Fact]
+    public void ARefusedRestore_KeepsTheDefaults()
+    {
+        _storage.ExpectRead(BrowserStorageArea.Local, StorageKey, BrowserStorageReadAnswer.Refused);
+
+        var cut = Render<FilterPanel>();
+
+        // … what the store and the host do with a refusal …
+        _storage.Verify();
+    }
+}
+```
+
+A restoration held pending across a change, then released:
+
+```csharp
+var restore = _storage.ExpectHeldRead(BrowserStorageArea.Local, StorageKey);
+var cut = Render<FilterPanel>();
+Assert.True(restore.IsReached);
+
+// … change the source while the read is pending …
+
+restore.Release(BrowserStorageReadAnswer.Stored(savedJson));
+cut.WaitForAssertion(() => { /* the restore settled, and the newer draft stands */ });
+_storage.Verify();
+```
+
+An older save completing after a newer one:
+
+```csharp
+var older = _storage.ExpectHeldWrite(BrowserStorageArea.Local, StorageKey, jsonA);
+var newer = _storage.ExpectHeldWrite(BrowserStorageArea.Local, StorageKey, jsonB);
+
+// … Apply A, then Apply B; both saves are now pending …
+
+newer.Release(BrowserStorageWriteAnswer.Succeeded);
+older.Release(BrowserStorageWriteAnswer.Refused);
+cut.WaitForAssertion(() => { /* B stays current */ });
+_storage.Verify();
+```
+
+(The component, the store's key and the JSON are illustrative.)
 
 ## Pitfalls
 
@@ -908,11 +1202,31 @@ means.
 - **No app-wide storage state belongs here.** "Storage is unavailable", an
   occurrence token and a notice's dismissal are all the host's. A primitive
   here that held one would be the per-app latch again.
-- **The storage wire is part of the contract.** Consumers' bUnit tests plan
-  `localStorage.getItem` and the rest by identifier and arguments. Changing
-  what is called breaks those tests. That covers a JavaScript module, another
-  argument order, or an extra call, and any such change is coordinated through
-  the umbrella.
+- **A consumer test that names `localStorage`, `sessionStorage`, `getItem`,
+  `setItem` or `removeItem` is a defect — use `BrowserStoragePlan`.** That
+  includes a `JSInterop.Setup` or `SetupVoid` for one of them, and a read of
+  `JSInterop.Invocations` by one of them. Each restates this library's
+  interop where a change here cannot reach it. A handler that answers a
+  storage call in the plan's place also fails `Verify`. The store's own key
+  is not the library's, and is fine.
+- **Changing how `BrowserStorage` reaches the browser** — a JavaScript
+  module, another argument order, an extra call — means changing
+  `BrowserStoragePlan`'s restated wire and `BrowserStorageTests`' literals in
+  the same commit. `BrowserStoragePlanTests` fails until the plan agrees with
+  the accessor. No consumer changes.
+- **Call `Verify`.** An unexpected call fails where it is made, but code under
+  test may swallow that failure, and a call that was never made fails
+  nowhere else. A test that plans storage ends with `Verify`.
+- **Declare successive answers in the order they are given.** Two answers
+  for one call — the same operation, area, key and written value — are given
+  in declaration order. Calls that differ are never ordered by declaring
+  them; say `RequireOrder` when the order is what the test is about.
+- **A held call never times out.** Awaiting an operation whose held call was
+  not released hangs the test. Release it, or assert on the render while it
+  is pending and do not await it.
+- **`Release` does not run the awaiting code.** The code resumes afterwards,
+  on its own context. Await the operation, or `WaitForAssertion` on the
+  render that follows; an assertion straight after `Release` may run first.
 - **Adding a primitive.** It goes in the root namespace, takes user-level
   selectors, and knows nothing of any domain. If it needs a member's type, it
   belongs in that member.
