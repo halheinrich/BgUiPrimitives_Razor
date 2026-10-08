@@ -21,14 +21,17 @@ https://github.com/halheinrich/BgUiPrimitives_Razor — branch `main`.
 ## Depends on
 
 Standalone, and it stays that way: this library sits below every Razor member
-and both hosts, so that no member types the same presentation rule twice.
+and both hosts, so that no member writes the same presentation rule, or the
+same browser-access policy, twice. Its primitives are domain-neutral:
+components, and the access to the browser that members and hosts share.
 Nothing in it may know about filters, quizzes, diagrams or XG — a primitive
 that needs a domain type is not a primitive and belongs in the member that
 owns the type.
 
-It does place obligations on any **host** that renders its components
-(see Public API, Host obligations): Bootstrap 5's stylesheet, and a link to
-the host's own scoped-CSS bundle.
+It does place obligations on any **host** (see Public API, Host
+obligations): for its components, Bootstrap 5's stylesheet and a link to the
+host's own scoped-CSS bundle; for its browser-storage access, one
+registration.
 
 ## Layout
 
@@ -38,12 +41,17 @@ and `Directory.Packages.props` (Central Package Management).
 
 **`BgUiPrimitives_Razor/`** — the Razor class library. Everything public is in
 the one namespace `BgUiPrimitives_Razor`, so a consumer's `_Imports.razor`
-carries one `@using` however many primitives the library grows. Its occupant:
+carries one `@using` however many primitives the library grows. Its occupants:
 
 - **The notice** — `Notice`, the component (markup in `Notice.razor`,
   parameters and the dismissal model in its code-behind, the little CSS
   Bootstrap lacks in `Notice.razor.css`); `NoticeKind` and
   `NoticeAnnouncement`, the user-level selectors its callers name.
+- **Browser storage** — `BrowserStorage`, the one guarded access to
+  `localStorage` and `sessionStorage`; `BrowserStorageArea`, the selector its
+  callers name; `BrowserStorageReadResult` and `BrowserStorageWriteResult`,
+  how the browser answered; `AddBrowserStorage`
+  (`BrowserStorageServiceCollectionExtensions`), the host's registration.
 
 **`BgUiPrimitives_Razor.TestSupport/`** — shipped for **consumers' test
 projects** to reference, and for nothing else. It reads a rendered notice back
@@ -64,7 +72,13 @@ the test. `NoticeTests` asserts through `NoticeBox` wherever the reader
 covers what is asserted, so the reader is exercised against the real
 component; `NoticeBoxTests` pins the reader against literal markup — the one
 test file that spells a notice out — and shows every rule it enforces
-failing. Also holds the trim-posture pin and `TestSupportPostureTests`.
+failing. `BrowserStorageTests` drives the storage access through bUnit's JS
+interop in strict mode: every browser answer is planned for the exact
+identifier and arguments an operation must send, so a call nobody planned
+fails, and the wire is restated there rather than borrowed from the
+implementation. `BrowserStorageRegistrationTests` reads the registration back
+from the service collection. Also holds the trim-posture pin and
+`TestSupportPostureTests`.
 
 ## Architecture
 
@@ -188,12 +202,120 @@ the component no longer writes a role on the box, so a migrating caller's
 `role="alert"` left on the tag would *land*, and wrap the notice's own region
 in a second one.
 
+### Browser storage access
+
+Hal's ruling on halheinrich/backgammon#374 (2026-10-08) is the policy, and
+`BrowserStorage` is its one owner. Each caller used to write its own access,
+under policies that disagreed: two latched after the first refusal, and some
+calls were unguarded. This section records how the type realises the ruling
+and why it has its shape.
+
+**It owns the access and the refusal boundary, nothing else.** That is one
+interop call per operation, and the line between the browser's refusal and
+every other failure. Each caller's store keeps parsing, serializing, defaults
+and judging whether a stored value is valid. Each host keeps whether storage
+"is unavailable", what the user is told and when, and that notice's lifetime
+and dismissal. The type holds no state at all, so it cannot hold an app-wide
+condition.
+
+**Every requested operation is attempted.** There is no latch. A refusal
+disables nothing: not later reads, writes or removals, not the other area,
+not a caller's in-memory value. Nothing is retried either; the next call a
+caller makes is simply made. One call's refusal is never an answer for
+another call:
+- a full quota refuses writes while reads are still served (`setItem` throws
+  `QuotaExceededError`: HTML Living Standard,
+  https://html.spec.whatwg.org/multipage/webstorage.html#dom-storage-setitem);
+- each area has its own storage bottle and quota (Storage Standard §4.1,
+  https://storage.spec.whatwg.org/), so one area can be full while the other
+  is not.
+
+**Outcomes are results.** A read answers `BrowserStorageReadResult`:
+- *stored*: `Value`, possibly the empty string;
+- *absent*: `getItem` answered null, which it does only for a key with no item;
+- *refused*: `Refusal`, the `JSException` exactly as raised.
+
+A write or a removal answers `BrowserStorageWriteResult`, *succeeded* or
+*refused*. A removal is a write. Removing a key with no item succeeds, since
+`removeItem` then returns without error (same standard,
+`#dom-storage-removeitem`). No write reads first, and none has an "absent"
+outcome.
+
+**Only the browser's refusal is caught.** A browser that blocks storage
+raises its error inside the interop call, and the error reaches .NET as a
+`JSException`. That is the precedent every member's guard was written against.
+It covers a throwing getter too:
+- the standard has the `localStorage` and `sessionStorage` getters throw
+  `SecurityError` when policy forbids persisting data;
+- interop resolves `localStorage.getItem` by property access inside the same
+  `try` that reports the call's failure (`beginInvokeJSFromDotNet` calls
+  `processJSCall`; read in `blazor.web.js` and `blazor.webassembly.js`
+  10.0.10).
+
+Everything else propagates. Probes against the .NET 10 runtime, run when
+this type was introduced, showed that:
+- static rendering's JS runtime throws `InvalidOperationException` for any
+  interop call;
+- `JSDisconnectedException` derives directly from `Exception`;
+- a call that outlives the runtime's default interop timeout fails with
+  `TaskCanceledException`, an `OperationCanceledException` (the control, with
+  no timeout, stayed pending).
+
+None of these is an answer from the browser.
+
+**Usage errors throw at the call.** An undeclared `BrowserStorageArea`, a null
+key or a null value throws synchronously, before a task exists and before
+any interop. That is the task-based asynchronous pattern's rule for usage
+errors, and they never become results. A null value is refused rather than
+stored as the string `"null"`; storing nothing is a removal. Any other string
+is a key or a value, the empty string included.
+
+**The shape, and what was rejected.**
+
+- *One type, with the area named per call.* `BrowserStorageArea` is the
+  user-level selector, and the type maps it to the browser object in one
+  place. An instance per area would need two registrations told apart by
+  keyed services, and would buy a store nothing: a store uses one area and
+  keeps it beside its key.
+- *Sealed, immutable result classes, produced only here.*
+  - Not structs, whose `default` would be a fabricated outcome.
+  - The flags carry `[MemberNotNullWhen]`, so `Value` after `IsStored` and
+    `Refusal` after `IsRefused` are non-null to the compiler. This is the
+    shape of ASP.NET Core's `AuthenticateResult`.
+  - No outcome enum beside the flags. It would be a second way to ask one
+    question, and a switch over it would still need a discard arm.
+  - No closed class hierarchy for pattern matching. C# cannot check that
+    switch for exhaustiveness either, and the flags read as plainly.
+  - Equality is reference equality. An outcome is read through its flags,
+    and a refusal carries an exception, which has no value equality.
+- *`Task<T>`, not `ValueTask<T>`.* `Task` is the pattern's default. A caller
+  may hold one or await it twice, and storage is not a hot path.
+- *No `CancellationToken`.* A Web Storage call is synchronous in the browser,
+  so there is nothing long-running to cancel. The runtime's default interop
+  timeout still applies, and it propagates as a cancellation.
+- *The browser's own functions, not a JavaScript module.* There is no asset
+  for a host to serve, and no module import that could fail and be mistaken
+  for a refusal.
+- *Registered by `AddBrowserStorage`, not by each host's
+  `AddScoped<BrowserStorage>()`* (BgFolderAccess_Razor's form). The lifetime
+  is the library's decision: an access must not outlive the `IJSRuntime` of
+  its own scope, which a server scopes per circuit. So the library decides it
+  once, with `TryAdd`, and a second call is harmless.
+  - The constructor stays public: DI activation needs it, and a test may
+    supply its own runtime.
+  - The extension lives in this library's one namespace, not in
+    `Microsoft.Extensions.DependencyInjection`, where Microsoft recommends
+    extension methods go. Everything public here is in one namespace, and
+    this library declares nothing in a namespace it does not own.
+
 ### Trim posture
 
 BgQuiz's WebAssembly client ships this assembly and its publish runs trim
 analysis with warnings as errors. The library declares `IsTrimmable` and runs
 the trim analyzer in its own build, so a trim-unsafe construct fails *this*
-repo's build in the change that introduced it.
+repo's build in the change that introduced it. `BrowserStorage` sends and
+receives only `string` through interop (keys, values and `getItem`'s answer),
+so no library type is ever an interop type argument.
 `BgUiPrimitivesRazorTrimPostureTests` pins both declarations — the emitted
 assembly metadata for `IsTrimmable`, and the project file itself (linked into
 the test output) for the analyzer switch, which leaves no trace in the
@@ -279,7 +401,8 @@ umbrella's to gate.
 ## Public API
 
 Namespace `BgUiPrimitives_Razor`. Consumers add `@using BgUiPrimitives_Razor`
-to `_Imports.razor`. The test-support surface, in
+to `_Imports.razor`, and a host's `Program.cs` adds `using BgUiPrimitives_Razor;`
+for `AddBrowserStorage`. The test-support surface, in
 `BgUiPrimitives_Razor.TestSupport`, is at the end of this section.
 
 ### `NoticeKind`
@@ -433,6 +556,101 @@ A notice whose occurrence outlives the page — the owner holds the dismissal:
 
 (The holder's member names above are illustrative; the shape is what matters.)
 
+### `BrowserStorage`
+
+```csharp
+public enum BrowserStorageArea { Local, Session }
+
+public sealed class BrowserStorage
+{
+    public BrowserStorage(IJSRuntime js);
+
+    public Task<BrowserStorageReadResult> ReadAsync(BrowserStorageArea area, string key);
+    public Task<BrowserStorageWriteResult> WriteAsync(BrowserStorageArea area, string key, string value);
+    public Task<BrowserStorageWriteResult> RemoveAsync(BrowserStorageArea area, string key);
+}
+
+public sealed class BrowserStorageReadResult
+{
+    [MemberNotNullWhen(true, nameof(Value))]    public bool IsStored { get; }
+                                                 public bool IsAbsent { get; }
+    [MemberNotNullWhen(true, nameof(Refusal))]  public bool IsRefused { get; }
+    public string? Value { get; }          // the stored string when IsStored, possibly ""
+    public JSException? Refusal { get; }   // the browser's exception, as raised, when IsRefused
+}
+
+public sealed class BrowserStorageWriteResult   // a write or a removal
+{
+    [MemberNotNullWhen(false, nameof(Refusal))] public bool Succeeded { get; }
+    [MemberNotNullWhen(true, nameof(Refusal))]  public bool IsRefused { get; }
+    public JSException? Refusal { get; }
+}
+
+public static class BrowserStorageServiceCollectionExtensions
+{
+    public static IServiceCollection AddBrowserStorage(this IServiceCollection services);
+}
+```
+
+Contracts:
+
+- **One call per operation**, on the area's object (`localStorage` for
+  `Local`, `sessionStorage` for `Session`):
+  - `ReadAsync` calls `getItem(key)`;
+  - `WriteAsync` calls `setItem(key, value)`;
+  - `RemoveAsync` calls `removeItem(key)`.
+
+  Nothing else is called, before or after.
+- **A read** is exactly one of `IsStored`, `IsAbsent` and `IsRefused`.
+  - `IsStored` with `Value == ""` is an item holding the empty string. Only
+    `IsAbsent` means there is no item.
+  - `Value` is null unless the item is stored, and `Refusal` is null unless
+    the read was refused.
+- **A write or a removal** is exactly one of `Succeeded` and `IsRefused`.
+  Removing a key with no item succeeds.
+- **A refusal** is a result, never an exception. `Refusal` is the very
+  `JSException` the call raised. Nothing is remembered, so the next call is
+  made.
+- **Thrown, synchronously, from the call and before any interop:**
+  `ArgumentOutOfRangeException` for an undeclared area, and
+  `ArgumentNullException` for a null key or value. Any other exception from
+  the call (anything that is not a `JSException`) propagates unchanged.
+- **Results** are immutable and constructed only by `BrowserStorage`. Their
+  equality is reference equality.
+- **`AddBrowserStorage`** registers `BrowserStorage` scoped; a second call
+  adds nothing. It returns the collection.
+
+Call shapes. A store restores a value under its own parser and default, and
+reports a refusal to the host's holder:
+
+```csharp
+var read = await Storage.ReadAsync(BrowserStorageArea.Local, StorageKey);
+if (read.IsRefused)
+{
+    Logger.LogWarning(read.Refusal, "Settings could not be read; the defaults stand.");
+    Condition.ReportRefused();             // the host's holder, not this library's
+}
+else if (read.IsStored && TryParse(read.Value, out var restored))
+{
+    Apply(restored);                       // invalid stored data is this store's to judge
+}
+```
+
+A store saves a change the screen has already made, and reports a refusal
+without undoing the change:
+
+```csharp
+_settings = changed;
+var written = await Storage.WriteAsync(BrowserStorageArea.Local, StorageKey, ToJson(changed));
+if (written.IsRefused)
+{
+    Logger.LogWarning(written.Refusal, "Settings could not be saved; they hold for this visit.");
+    Condition.ReportRefused();
+}
+```
+
+(The store's and the holder's member names are illustrative.)
+
 ### Host obligations
 
 - **Bootstrap 5.** The component emits `alert`, `alert-info` /
@@ -443,6 +661,12 @@ A notice whose occurrence outlives the page — the owner holds the dismissal:
   when the host references this library only transitively, through another
   Razor member. The host's root document must link that bundle. A host that
   has never had scoped CSS of its own may not link it yet.
+- **Registering browser storage**, when anything the host renders or
+  constructs injects `BrowserStorage`: `builder.Services.AddBrowserStorage();`.
+  Register it in every project that creates such a component or service. In
+  a Blazor Web App that means the client, and also the server if the server
+  prerenders or runs that component. A missing registration fails when the
+  component or service is created.
 
 ### Test support — `BgUiPrimitives_Razor.TestSupport`
 
@@ -653,6 +877,42 @@ means.
   wrapper.** Either puts the button's accessible name inside an atomic live
   region, so every dismissible notice would read "Dismiss this message,
   button" after its text.
+
+- **Do not latch around browser storage.** A caller that skips its next call
+  after a refusal re-creates what was ruled out. One example is a "storage
+  unavailable" flag consulted before calling. Report each refusal to the
+  host's holder and keep calling. A holder may remember that a refusal
+  *happened*, for its notice; it never gates a call.
+- **`read.Value ?? fallback` loses the refusal.** It yields the right value
+  and drops the fact. A store whose host reports refusals checks `IsRefused`
+  first.
+- **Parse outside the storage result.** Read first, then parse `Value` under
+  your own parser's catch. A parse failure is invalid stored data, which is
+  the store's to handle; it never belongs in the refused branch. A
+  `catch (JSException)` left around a storage call is dead code, so remove it
+  when migrating.
+- **Migrating an unguarded call changes what follows it.** An awaited write
+  that used to throw on refusal now returns, and the code after it runs.
+  That is the point: a refused write must not stop unrelated work. Decide at
+  each call site what the refusal means; usually that is nothing beyond the
+  host's report.
+- **Storage calls need interop.** Static rendering cannot make interop calls.
+  A storage call there throws `InvalidOperationException`, which propagates,
+  because it is not a refusal. Call from `OnAfterRenderAsync` or an event
+  handler.
+- **Null is not a value.** `WriteAsync` with a null value throws. To store
+  nothing, call `RemoveAsync`.
+- **Register browser storage through `AddBrowserStorage`, not by hand.** The
+  lifetime is part of the contract. On a server, a singleton would hold the
+  first circuit's runtime.
+- **No app-wide storage state belongs here.** "Storage is unavailable", an
+  occurrence token and a notice's dismissal are all the host's. A primitive
+  here that held one would be the per-app latch again.
+- **The storage wire is part of the contract.** Consumers' bUnit tests plan
+  `localStorage.getItem` and the rest by identifier and arguments. Changing
+  what is called breaks those tests. That covers a JavaScript module, another
+  argument order, or an extra call, and any such change is coordinated through
+  the umbrella.
 - **Adding a primitive.** It goes in the root namespace, takes user-level
   selectors, and knows nothing of any domain. If it needs a member's type, it
   belongs in that member.
@@ -662,4 +922,5 @@ means.
 None open. Adoption of `Notice` by `XgFilter_Razor`, `ExtractFromXgToCsv` and
 `BgQuiz_Blazor` — and with it the replacement of the first two's own notice
 test helpers by `NoticeBox` — is tracked in the umbrella
-(halheinrich/backgammon#248).
+(halheinrich/backgammon#248). Adoption of `BrowserStorage` by the same three
+members is tracked there too (halheinrich/backgammon#374).
