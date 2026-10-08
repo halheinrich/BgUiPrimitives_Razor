@@ -4,12 +4,15 @@
        generation are repo-wide policy — see ..\Directory.Build.props. Only
        per-project decisions live here.
 
-       What this is: the reader of a rendered <Notice>, shipped for consumers'
-       TEST projects to reference, so that a consumer asserts a notice in the
-       component's vocabulary (NoticeKind, NoticeAnnouncement, dismissible or
-       not) and never names its markup. It is not a product assembly and not a
-       test project: it carries no test SDK, so `dotnet test` does not try to
-       run it. -->
+       What this is: the library's test-side translations, shipped for
+       consumers' TEST projects to reference — the reader of a rendered
+       <Notice>, so that a consumer asserts a notice in the component's
+       vocabulary (NoticeKind, NoticeAnnouncement, dismissible or not) and
+       never names its markup; and the planner of BrowserStorage's calls, so
+       that a consumer plans storage in the accessor's vocabulary (area, key,
+       stored, absent, refused) and never names an interop identifier. It is
+       not a product assembly and not a test project: it carries no test SDK,
+       so `dotnet test` does not try to run it. -->
   <PropertyGroup>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
@@ -32,11 +35,13 @@
   <!-- The dependencies are a decision (INSTRUCTIONS.md, Architecture, "The
        test-support project"):
        - bunit, because the two dismiss gestures are actions and only the test
-         renderer can dispatch a click; and the finders take what it renders.
+         renderer can dispatch a click; the finders take what it renders; and
+         the storage planner answers calls made through its JS interop.
        - AngleSharp, directly, because the public surface is written in
          AngleSharp.Dom types (rationale in Directory.Packages.props).
        - No test framework. A failure is this assembly's own
-         NoticeAssertionException, which every framework reports as a failed
+         NoticeAssertionException or BrowserStorageAssertionException, which
+         every framework reports as a failed
          test, so a consumer's xunit (or its move to another major, a different
          package identity that would collide with one pinned here) is its own
          business. -->
