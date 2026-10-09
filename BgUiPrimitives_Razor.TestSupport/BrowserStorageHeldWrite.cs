@@ -35,8 +35,12 @@ public sealed class BrowserStorageHeldWrite : BrowserStorageExpectation
     /// <summary>
     /// Completes the pending call with the browser's
     /// <paramref name="answer"/>. The code awaiting the call resumes
-    /// afterwards, on its own context: await the operation, or wait for the
-    /// render that follows it.
+    /// afterwards, on its own context, and calls released in turn may
+    /// finish in either order. Before asserting on what the completion
+    /// did, wait for it to finish: await the operation, or an observation
+    /// only its continuation produces, bounded by the test's normal
+    /// timeout. A render that already shows the expected state is not
+    /// that evidence.
     /// </summary>
     /// <param name="answer">How the browser answers the write or removal.</param>
     /// <exception cref="ArgumentNullException"><paramref name="answer"/> is <see langword="null"/>.</exception>

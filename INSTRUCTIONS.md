@@ -490,8 +490,10 @@ at bUnit's tag `v2.8.6`, the version this repository pins):
 A held call has no timeout, deliberately. It is pending for as long as the
 test says, and a timer would make the result depend on how fast the test
 ran. Its completion runs the awaiting code's continuation asynchronously,
-never inside `Release`. The test awaits the operation, or waits for the
-render that follows it.
+never inside `Release`. The test waits for that continuation to finish
+before asserting on it: it awaits the operation, or an observation only
+the continuation produces, bounded by the test's normal timeout (Public
+API, the storage planner's call shapes).
 
 **Verified explicitly.** `Verify` is a call the test makes, as `ShouldBe` is.
 Verifying at disposal was rejected: it would throw from `Dispose`, and it
@@ -1055,7 +1057,48 @@ public class FilterStoreTests : BunitContext
 }
 ```
 
-A restoration held pending across a change, then released:
+A test of a held call asserts only after the continuation it is about has
+**finished**, and it proves that by awaiting it, bounded by the test's
+normal timeout (`BunitContext.DefaultWaitTimeout`). Releasing a call does
+not run its continuation, and releasing two calls in an order does not
+finish their continuations in that order. A render that already shows the
+expected state proves nothing either: the state may hold before the
+continuation runs, and a stale completion the code rightly rejects renders
+nothing at all.
+
+An older save completing after a newer one. Each Apply is a click, and
+`ClickAsync` returns a task that completes when the event handler is done
+(bUnit 2.8.6's documentation of `EventHandlerDispatchExtensions.ClickAsync`).
+So the test keeps both tasks and finishes them one at a time:
+
+```csharp
+var older = _storage.ExpectHeldWrite(BrowserStorageArea.Local, StorageKey, jsonA);
+var newer = _storage.ExpectHeldWrite(BrowserStorageArea.Local, StorageKey, jsonB);
+
+// … select A …
+var applyA = cut.Find("#applyFilter").ClickAsync(new MouseEventArgs());
+// … select B …
+var applyB = cut.Find("#applyFilter").ClickAsync(new MouseEventArgs());
+Assert.True(older.IsReached);
+Assert.True(newer.IsReached);
+
+newer.Release(BrowserStorageWriteAnswer.Succeeded);
+await applyB.WaitAsync(BunitContext.DefaultWaitTimeout);
+
+older.Release(BrowserStorageWriteAnswer.Refused);
+await applyA.WaitAsync(BunitContext.DefaultWaitTimeout);   // A's continuation has run
+
+// … B is still current …
+_storage.Verify();
+```
+
+A restoration held pending across a change, then released. The read starts
+in a lifecycle method, so there is no task of it to keep. The test waits
+instead for an observation that only the restoration's continuation
+produces, and bounds that wait too. `WaitForAssertion` and `WaitForState`
+are not that observation when the continuation may not render: they check
+once at the start and then only after each render (bUnit's
+`src/bunit/Extensions/WaitForHelpers/WaitForHelper.cs` at tag `v2.8.6`):
 
 ```csharp
 var restore = _storage.ExpectHeldRead(BrowserStorageArea.Local, StorageKey);
@@ -1065,25 +1108,16 @@ Assert.True(restore.IsReached);
 // … change the source while the read is pending …
 
 restore.Release(BrowserStorageReadAnswer.Stored(savedJson));
-cut.WaitForAssertion(() => { /* the restore settled, and the newer draft stands */ });
+await Owner.RestorationSettled.WaitAsync(BunitContext.DefaultWaitTimeout);
+
+// … the newer draft stands …
 _storage.Verify();
 ```
 
-An older save completing after a newer one:
-
-```csharp
-var older = _storage.ExpectHeldWrite(BrowserStorageArea.Local, StorageKey, jsonA);
-var newer = _storage.ExpectHeldWrite(BrowserStorageArea.Local, StorageKey, jsonB);
-
-// … Apply A, then Apply B; both saves are now pending …
-
-newer.Release(BrowserStorageWriteAnswer.Succeeded);
-older.Release(BrowserStorageWriteAnswer.Refused);
-cut.WaitForAssertion(() => { /* B stays current */ });
-_storage.Verify();
-```
-
-(The component, the store's key and the JSON are illustrative.)
+(The component, the selector, the owner's `RestorationSettled` signal, the
+store's key and the JSON are illustrative. The signal stands for whatever
+the code under test exposes that completes when its restoration has
+settled, including a restoration that rejected a stale result.)
 
 ## Pitfalls
 
@@ -1221,12 +1255,23 @@ _storage.Verify();
   for one call — the same operation, area, key and written value — are given
   in declaration order. Calls that differ are never ordered by declaring
   them; say `RequireOrder` when the order is what the test is about.
-- **A held call never times out.** Awaiting an operation whose held call was
-  not released hangs the test. Release it, or assert on the render while it
-  is pending and do not await it.
-- **`Release` does not run the awaiting code.** The code resumes afterwards,
-  on its own context. Await the operation, or `WaitForAssertion` on the
-  render that follows; an assertion straight after `Release` may run first.
+- **A held call never times out, so bound every wait on one.** Await a held
+  operation with `WaitAsync(BunitContext.DefaultWaitTimeout)`, the test's
+  normal timeout. Then a call that is never completed fails the test instead
+  of hanging it. The deadline is only that guard; the reached, pending and
+  completed states are the evidence. A test that leaves a call pending to
+  assert on the pending state keeps the operation, and releases and awaits it
+  in cleanup.
+- **`Release` does not run the awaiting code, and release order is not
+  completion order.** The code resumes afterwards, on its own context, and
+  two calls released in turn may finish in either order. Before asserting on
+  what a completion did, wait for that completion to finish: await the
+  caller's operation (the task `ClickAsync` returns, for a click), or an
+  observation only that continuation produces. A render showing the expected
+  state is not that evidence. The state may hold before the continuation
+  runs. And a stale completion that is rightly rejected renders nothing.
+  `WaitForAssertion` re-checks only after a render, so it either passes
+  before that continuation has run or waits for a render that never comes.
 - **Adding a primitive.** It goes in the root namespace, takes user-level
   selectors, and knows nothing of any domain. If it needs a member's type, it
   belongs in that member.

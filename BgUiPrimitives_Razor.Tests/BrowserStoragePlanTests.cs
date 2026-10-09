@@ -404,7 +404,7 @@ public class BrowserStoragePlanTests : BunitContext
 
         held.Release(ReadAnswer(kind));
 
-        Assert.Equal(ExpectedOutcome(kind), Outcome(await read));
+        Assert.Equal(ExpectedOutcome(kind), Outcome(await CompletedAfterRelease(read)));
         _plan.Verify();
     }
 
@@ -422,7 +422,7 @@ public class BrowserStoragePlanTests : BunitContext
 
         held.Release(refused ? BrowserStorageWriteAnswer.Refused : BrowserStorageWriteAnswer.Succeeded);
 
-        Assert.Equal(refused ? "refused" : "succeeded", Outcome(await write));
+        Assert.Equal(refused ? "refused" : "succeeded", Outcome(await CompletedAfterRelease(write)));
         _plan.Verify();
     }
 
@@ -439,7 +439,7 @@ public class BrowserStoragePlanTests : BunitContext
 
         held.Release(refused ? BrowserStorageWriteAnswer.Refused : BrowserStorageWriteAnswer.Succeeded);
 
-        Assert.Equal(refused ? "refused" : "succeeded", Outcome(await removal));
+        Assert.Equal(refused ? "refused" : "succeeded", Outcome(await CompletedAfterRelease(removal)));
         _plan.Verify();
     }
 
@@ -459,11 +459,11 @@ public class BrowserStoragePlanTests : BunitContext
         Assert.True(newer.IsReached);
 
         newer.Release(BrowserStorageReadAnswer.Stored("newer"));
-        Assert.Equal("stored 'newer'", Outcome(await newerRead));
+        Assert.Equal("stored 'newer'", Outcome(await CompletedAfterRelease(newerRead)));
         Assert.False(olderRead.IsCompleted);
 
         older.Release(BrowserStorageReadAnswer.Stored("older"));
-        Assert.Equal("stored 'older'", Outcome(await olderRead));
+        Assert.Equal("stored 'older'", Outcome(await CompletedAfterRelease(olderRead)));
         _plan.Verify();
     }
 
@@ -481,11 +481,11 @@ public class BrowserStoragePlanTests : BunitContext
         Assert.True(newer.IsReached);
 
         newer.Release(BrowserStorageWriteAnswer.Succeeded);
-        Assert.Equal("succeeded", Outcome(await newerWrite));
+        Assert.Equal("succeeded", Outcome(await CompletedAfterRelease(newerWrite)));
         Assert.False(olderWrite.IsCompleted);
 
         older.Release(BrowserStorageWriteAnswer.Refused);
-        Assert.Equal("refused", Outcome(await olderWrite));
+        Assert.Equal("refused", Outcome(await CompletedAfterRelease(olderWrite)));
         _plan.Verify();
     }
 
@@ -504,7 +504,7 @@ public class BrowserStoragePlanTests : BunitContext
         Assert.True(held.IsReached);
 
         held.Release(BrowserStorageReadAnswer.Stored(Value));
-        Assert.Equal($"stored '{Value}'", Outcome(await second));
+        Assert.Equal($"stored '{Value}'", Outcome(await CompletedAfterRelease(second)));
         _plan.Verify();
     }
 
@@ -522,19 +522,28 @@ public class BrowserStoragePlanTests : BunitContext
         var twice = Assert.Throws<InvalidOperationException>(() => held.Release(BrowserStorageReadAnswer.Absent));
         Assert.Contains("has already been released", twice.Message);
 
-        Assert.Equal("absent", Outcome(await read));
+        Assert.Equal("absent", Outcome(await CompletedAfterRelease(read)));
     }
 
     // Verify counts a held call as made once it is reached, released or not;
-    // one never reached was not made.
+    // one never reached was not made. The pending operation is kept, and
+    // released and awaited in cleanup, so the test leaves nothing behind.
     [Fact]
-    public void AHeldCall_ReachedAndStillPending_PassesVerify()
+    public async Task AHeldCall_ReachedAndStillPending_PassesVerify()
     {
-        _plan.ExpectHeldWrite(BrowserStorageArea.Local, Key, Value);
+        var held = _plan.ExpectHeldWrite(BrowserStorageArea.Local, Key, Value);
+        var write = Storage.WriteAsync(BrowserStorageArea.Local, Key, Value);
 
-        _ = Storage.WriteAsync(BrowserStorageArea.Local, Key, Value);
-
-        _plan.Verify();
+        try
+        {
+            Assert.False(write.IsCompleted);
+            _plan.Verify();
+        }
+        finally
+        {
+            held.Release(BrowserStorageWriteAnswer.Succeeded);
+            await CompletedAfterRelease(write);
+        }
     }
 
     [Fact]
@@ -695,6 +704,15 @@ public class BrowserStoragePlanTests : BunitContext
         Assert.True(operation.IsCompleted, "The operation is still pending: the plan held a call it should have answered.");
         return await operation;
     }
+
+    // A held operation resumes asynchronously after its release, so it is
+    // awaited — within bUnit's normal wait, BunitContext.DefaultWaitTimeout,
+    // so that a release that never completed the call fails the test with a
+    // TimeoutException instead of hanging it. The deadline only guards
+    // against a hang: the reached, pending and completed states asserted
+    // around it are the evidence.
+    private static Task<T> CompletedAfterRelease<T>(Task<T> operation) =>
+        operation.WaitAsync(BunitContext.DefaultWaitTimeout);
 
     private static string Accepted(Operation operation) =>
         operation == Operation.Read ? $"stored '{Value}'" : "succeeded";
