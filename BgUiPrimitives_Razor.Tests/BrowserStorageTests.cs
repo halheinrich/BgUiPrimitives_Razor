@@ -20,8 +20,7 @@ namespace BgUiPrimitives_Razor.Tests;
 // BrowserStoragePlan, the test-support planner that restates the same wire
 // for consumers: these tests are the independent statement of the protocol
 // that the planner is held to, so they plan with bUnit's own Setup and
-// SetupVoid and never through the planner. (The planner offers no
-// identifier to take; TestSupportPostureTests pins that.)
+// SetupVoid and never through the planner.
 public class BrowserStorageTests : BunitContext
 {
     private const string Key = "bg.test.key";
