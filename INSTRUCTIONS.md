@@ -50,8 +50,12 @@ carries one `@using` however many primitives the library grows. Its occupants:
 - **Browser storage** — `BrowserStorage`, the one guarded access to
   `localStorage` and `sessionStorage`; `BrowserStorageArea`, the selector its
   callers name; `BrowserStorageReadResult` and `BrowserStorageWriteResult`,
-  how the browser answered; `AddBrowserStorage`
-  (`BrowserStorageServiceCollectionExtensions`), the host's registration.
+  how the browser answered; `BrowserStorageCondition`, the app's one record
+  that the browser refused a call this visit, and whether its notice was
+  dismissed; `ReportingBrowserStorage`, the accessor with every refusal
+  reported to that condition and logged; `AddBrowserStorage` and
+  `AddReportingBrowserStorage` (`BrowserStorageServiceCollectionExtensions`),
+  the host's registrations.
 
 **`BgUiPrimitives_Razor.TestSupport/`** — shipped for **consumers' test
 projects** to reference, and for nothing else. It translates between the
@@ -91,8 +95,13 @@ identifier and arguments an operation must send, so a call nobody planned
 fails, and the wire is restated there rather than borrowed from the
 implementation or from the planner. `BrowserStoragePlanTests` runs the real
 accessor through `BrowserStoragePlan` and shows every rule the planner
-enforces failing. `BrowserStorageRegistrationTests` reads the registration
-back from the service collection. Also holds the trim-posture pin and
+enforces failing. `BrowserStorageConditionTests` pins the condition's
+occurrence, dismissal and observers. `ReportingBrowserStorageTests` runs the
+real accessor through `BrowserStoragePlan` under the reporting access, with
+the umbrella's shared test loggers (`RecordingLogger`, `ThrowingLogger`, from
+`BgDataTypes_Lib.TestSupport`, which the solution carries for that reason).
+`BrowserStorageRegistrationTests` reads the registrations back from the
+service collection. Also holds the trim-posture pin and
 `TestSupportPostureTests`.
 
 ## Architecture
@@ -228,10 +237,10 @@ and why it has its shape.
 **It owns the access and the refusal boundary, nothing else.** That is one
 interop call per operation, and the line between the browser's refusal and
 every other failure. Each caller's store keeps parsing, serializing, defaults
-and judging whether a stored value is valid. Each host keeps whether storage
-"is unavailable", what the user is told and when, and that notice's lifetime
-and dismissal. The type holds no state at all, so it cannot hold an app-wide
-condition.
+and judging whether a stored value is valid. The type holds no state at all,
+so it cannot hold an app-wide condition: that is `BrowserStorageCondition`'s,
+fed by `ReportingBrowserStorage` (below). Each host keeps what the user is
+told and where.
 
 **Every requested operation is attempted.** There is no latch. A refusal
 disables nothing: not later reads, writes or removals, not the other area,
@@ -322,6 +331,46 @@ is a key or a value, the empty string included.
     `Microsoft.Extensions.DependencyInjection`, where Microsoft recommends
     extension methods go. Everything public here is in one namespace, and
     this library declares nothing in a namespace it does not own.
+
+**The condition and the reporting access.** Both hosts wrote the host-side
+half of this policy — whether storage is unavailable, how a refusal is
+reported, the notice's dismissal — and each wrote it twice over, under one
+policy (`SPEC-notices.md` §2). Hal ruled that common code moves to one shared
+owner (halheinrich/backgammon#424, 2026-10-19). This library owns the
+accessor and its results, so it owns the condition and the access that
+reports to it.
+
+- *`BrowserStorageCondition` is the one fact.* One per loaded app. The first
+  refusal reported begins the occurrence; every later one is the same
+  occurrence, so a dismissal holds across navigation and further refusals. A
+  dismissal before any occurrence throws, since it would hide the occurrence
+  before it began. Nothing consults it before a call: it records, and gates
+  nothing. A page attaches an observer, is told the current state at once and
+  each change after, and re-renders. Not thread-safe: every member runs on
+  the renderer's synchronization context.
+- *The condition holds no logger.* It is one fact however it arose. What a
+  refusal costs is the caller's to say, and only the caller knows it.
+- *`ReportingBrowserStorage` says it, once per refusal.* Each operation takes
+  the area, the key and the caller's **consequence phrase**, required and
+  non-blank — what the refusal means for that caller, such as "the mix panel
+  starts blank for this visit". It makes the accessor's one call. On a
+  refusal it reports to the condition, then logs one warning carrying the
+  browser's exception, the operation, the key and the phrase, under one
+  message template. It returns the accessor's own result unchanged. A success
+  reports and logs nothing.
+- *Containment.* The logging call alone is wrapped. A logger that throws is
+  contained there, after the occurrence is recorded, so a failing logging
+  provider costs neither the occurrence nor the result.
+- *The accessor's boundary is unchanged.* Anything `BrowserStorage` throws or
+  propagates — an argument error, the platform refusing interop, a timeout —
+  propagates from here unchanged, reported to nothing.
+- *Results, not values.* A caller that must tell a refusal from nothing
+  stored reads the result; the common caller reads
+  `IsStored ? Value : null`. No latch, retry or default is added.
+- *Registered by `AddReportingBrowserStorage`.* It registers the access and
+  the condition scoped with `TryAdd`, and calls `AddBrowserStorage` itself,
+  so a host cannot register the condition without the accessor beneath it.
+  Scoped means one condition per loaded app, per circuit on a server.
 
 ### Trim posture
 
@@ -525,7 +574,7 @@ already makes.
 
 Namespace `BgUiPrimitives_Razor`. Consumers add `@using BgUiPrimitives_Razor`
 to `_Imports.razor`, and a host's `Program.cs` adds `using BgUiPrimitives_Razor;`
-for `AddBrowserStorage`. The test-support surface, in
+for `AddBrowserStorage` and `AddReportingBrowserStorage`. The test-support surface, in
 `BgUiPrimitives_Razor.TestSupport`, is at the end of this section.
 
 ### `NoticeKind`
@@ -709,9 +758,30 @@ public sealed class BrowserStorageWriteResult   // a write or a removal
     public JSException? Refusal { get; }
 }
 
+public sealed class BrowserStorageCondition   // one per loaded app
+{
+    public bool HasOccurred { get; }           // a refusal this visit; true until a reload
+    public bool IsNoticeDismissed { get; }     // only ever true while HasOccurred is
+
+    public void ReportRefused(JSException refusal);
+    public void DismissNotice();               // InvalidOperationException before any occurrence
+    public IDisposable Attach(Action observer);
+}
+
+public sealed class ReportingBrowserStorage
+{
+    public ReportingBrowserStorage(
+        BrowserStorage storage, BrowserStorageCondition condition, ILogger<ReportingBrowserStorage> logger);
+
+    public Task<BrowserStorageReadResult> ReadAsync(BrowserStorageArea area, string key, string consequence);
+    public Task<BrowserStorageWriteResult> WriteAsync(BrowserStorageArea area, string key, string value, string consequence);
+    public Task<BrowserStorageWriteResult> RemoveAsync(BrowserStorageArea area, string key, string consequence);
+}
+
 public static class BrowserStorageServiceCollectionExtensions
 {
     public static IServiceCollection AddBrowserStorage(this IServiceCollection services);
+    public static IServiceCollection AddReportingBrowserStorage(this IServiceCollection services);
 }
 ```
 
@@ -746,37 +816,51 @@ Contracts:
   equality is reference equality.
 - **`AddBrowserStorage`** registers `BrowserStorage` scoped; a second call
   adds nothing. It returns the collection.
+- **`BrowserStorageCondition`**: the first `ReportRefused` sets
+  `HasOccurred` and notifies; later ones change nothing. `DismissNotice`
+  sets `IsNoticeDismissed` and notifies; again changes nothing; before any
+  occurrence it throws `InvalidOperationException` and records nothing.
+  `Attach` calls the observer once before returning, then after each change,
+  until the handle is disposed (twice is harmless); observers are told from
+  a copy. Null arguments throw `ArgumentNullException`. Not thread-safe.
+- **`ReportingBrowserStorage`**: each operation makes the accessor's one
+  call. On a refusal it reports to the condition, then logs one warning,
+  with the refusal as its exception:
+  `The browser refused a storage {Operation} of the key {Key}; {Consequence}.`
+  (`Operation` is `read`, `write` or `removal`). It then returns the
+  accessor's result unchanged. A logger that throws is contained around the
+  logging call. A success reports and logs nothing. A null or blank
+  `consequence` throws `ArgumentException` at the call, before any call.
+  Everything the accessor throws or propagates passes through unchanged and
+  unreported.
+- **`AddReportingBrowserStorage`** registers `ReportingBrowserStorage` and
+  `BrowserStorageCondition` scoped, and calls `AddBrowserStorage`; a second
+  call adds nothing. It returns the collection.
 
-Call shapes. A store restores a value under its own parser and default, and
-reports a refusal to the host's holder:
+Call shapes. A store restores a value under its own parser and default; the
+refusal is reported and logged before the result returns:
 
 ```csharp
-var read = await Storage.ReadAsync(BrowserStorageArea.Local, StorageKey);
-if (read.IsRefused)
-{
-    Logger.LogWarning(read.Refusal, "Settings could not be read; the defaults stand.");
-    Condition.ReportRefused();             // the host's holder, not this library's
-}
-else if (read.IsStored && TryParse(read.Value, out var restored))
+var read = await Storage.ReadAsync(BrowserStorageArea.Local, StorageKey,
+    "the defaults stand for this visit");
+if (read.IsStored && TryParse(read.Value, out var restored))
 {
     Apply(restored);                       // invalid stored data is this store's to judge
 }
 ```
 
-A store saves a change the screen has already made, and reports a refusal
+A store saves a change the screen has already made; a refusal is reported
 without undoing the change:
 
 ```csharp
 _settings = changed;
-var written = await Storage.WriteAsync(BrowserStorageArea.Local, StorageKey, ToJson(changed));
-if (written.IsRefused)
-{
-    Logger.LogWarning(written.Refusal, "Settings could not be saved; they hold for this visit.");
-    Condition.ReportRefused();
-}
+await Storage.WriteAsync(BrowserStorageArea.Local, StorageKey, ToJson(changed),
+    "the settings hold for this visit only");
 ```
 
-(The store's and the holder's member names are illustrative.)
+(`Storage` is the injected `ReportingBrowserStorage`; the store's member
+names are illustrative. `BrowserStorage` itself takes the same arguments,
+less the phrase, answers the same results, and reports nothing.)
 
 ### Host obligations
 
@@ -789,8 +873,10 @@ if (written.IsRefused)
   Razor member. The host's root document must link that bundle. A host that
   has never had scoped CSS of its own may not link it yet.
 - **Registering browser storage**, when anything the host renders or
-  constructs injects `BrowserStorage`: `builder.Services.AddBrowserStorage();`.
-  Register it in every project that creates such a component or service. In
+  constructs injects `BrowserStorage`: `builder.Services.AddBrowserStorage();`;
+  when it injects `ReportingBrowserStorage` or `BrowserStorageCondition`:
+  `builder.Services.AddReportingBrowserStorage();`, which also registers
+  `BrowserStorage`. Register it in every project that creates such a component or service. In
   a Blazor Web App that means the client, and also the server if the server
   prerenders or runs that component. A missing registration fails when the
   component or service is created.
@@ -1208,9 +1294,10 @@ settled, including a restoration that rejected a stale result.)
 
 - **Do not latch around browser storage.** A caller that skips its next call
   after a refusal re-creates what was ruled out. One example is a "storage
-  unavailable" flag consulted before calling. Report each refusal to the
-  host's holder and keep calling. A holder may remember that a refusal
-  *happened*, for its notice; it never gates a call.
+  unavailable" flag consulted before calling. Report each refusal to
+  `BrowserStorageCondition` (`ReportingBrowserStorage` does) and keep
+  calling. The condition remembers that a refusal *happened*, for the
+  notice; nothing consults it before a call.
 - **`read.Value ?? fallback` loses the refusal.** It yields the right value
   and drops the fact. A store whose host reports refusals checks `IsRefused`
   first.
@@ -1233,9 +1320,10 @@ settled, including a restoration that rejected a stale result.)
 - **Register browser storage through `AddBrowserStorage`, not by hand.** The
   lifetime is part of the contract. On a server, a singleton would hold the
   first circuit's runtime.
-- **No app-wide storage state belongs here.** "Storage is unavailable", an
-  occurrence token and a notice's dismissal are all the host's. A primitive
-  here that held one would be the per-app latch again.
+- **App-wide storage state is `BrowserStorageCondition`'s, and it gates
+  nothing.** The occurrence and the notice's dismissal live there and
+  nowhere else. A member that consulted it before a call, or a second holder
+  beside it, would be the per-app latch again.
 - **A consumer test that names `localStorage`, `sessionStorage`, `getItem`,
   `setItem` or `removeItem` is a defect — use `BrowserStoragePlan`.** That
   includes a `JSInterop.Setup` or `SetupVoid` for one of them, and a read of
