@@ -61,4 +61,67 @@ public class BrowserStorageRegistrationTests : BunitContext
         Assert.Equal("localStorage.getItem", Assert.Single(JSInterop.Invocations).Identifier);
         Assert.Same(JSInterop.JSRuntime, Services.GetRequiredService<IJSRuntime>());
     }
+
+    // The reporting access and the condition it reports to are registered
+    // together, scoped, with the accessor beneath them: a host cannot register
+    // the condition without the access that feeds it.
+    [Fact]
+    public void AddReportingBrowserStorage_RegistersTheAccessTheConditionAndTheAccessor_Scoped()
+    {
+        Services.AddReportingBrowserStorage();
+
+        foreach (var type in new[] { typeof(ReportingBrowserStorage), typeof(BrowserStorageCondition), typeof(BrowserStorage) })
+        {
+            var registration = Assert.Single(Services, d => d.ServiceType == type);
+            Assert.Equal(ServiceLifetime.Scoped, registration.Lifetime);
+            Assert.Equal(type, registration.ImplementationType);
+        }
+    }
+
+    // A second call — or AddBrowserStorage before or after it — registers
+    // each once.
+    [Fact]
+    public void AddReportingBrowserStorage_Twice_RegistersEachOnce()
+    {
+        Services.AddBrowserStorage();
+        Services.AddReportingBrowserStorage();
+        Services.AddReportingBrowserStorage();
+        Services.AddBrowserStorage();
+
+        Assert.Single(Services, d => d.ServiceType == typeof(ReportingBrowserStorage));
+        Assert.Single(Services, d => d.ServiceType == typeof(BrowserStorageCondition));
+        Assert.Single(Services, d => d.ServiceType == typeof(BrowserStorage));
+    }
+
+    [Fact]
+    public void AddReportingBrowserStorage_ReturnsTheCollection_ForChaining()
+    {
+        Assert.Same(Services, Services.AddReportingBrowserStorage());
+    }
+
+    [Fact]
+    public void AddReportingBrowserStorage_OnNull_Throws()
+    {
+        var thrown = Assert.Throws<ArgumentNullException>(
+            () => BrowserStorageServiceCollectionExtensions.AddReportingBrowserStorage(null!));
+
+        Assert.Equal("services", thrown.ParamName);
+    }
+
+    // Resolved from the host registration, the access reports to the scope's
+    // one condition: the instance a page injects to show the notice.
+    [Fact]
+    public async Task TheRegisteredAccess_ReportsToTheScopesCondition()
+    {
+        Services.AddReportingBrowserStorage();
+        JSInterop.Mode = JSRuntimeMode.Strict;
+        JSInterop.Setup<string?>("localStorage.getItem", "k")
+            .SetException(new JSException("SecurityError: The operation is insecure."));
+
+        var read = await Services.GetRequiredService<ReportingBrowserStorage>()
+            .ReadAsync(BrowserStorageArea.Local, "k", "the defaults stand");
+
+        Assert.True(read.IsRefused);
+        Assert.True(Services.GetRequiredService<BrowserStorageCondition>().HasOccurred);
+    }
 }

@@ -28,6 +28,11 @@
          exercised against the real component and a change to the markup
          breaks one place. -->
     <ProjectReference Include="..\BgUiPrimitives_Razor.TestSupport\BgUiPrimitives_Razor.TestSupport.csproj" />
+    <!-- The umbrella's shared test loggers (RecordingLogger, ThrowingLogger),
+         so the reporting access's warning and its containment are asserted
+         with the loggers every member's tests use, not one stated here. A
+         test-only reference: the library itself references no project. -->
+    <ProjectReference Include="..\..\BgDataTypes_Lib\BgDataTypes_Lib.TestSupport\BgDataTypes_Lib.TestSupport.csproj" />
   </ItemGroup>
 
   <ItemGroup>
