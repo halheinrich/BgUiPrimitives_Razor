@@ -3,6 +3,32 @@
 > Collaboration contract: [`../AGENTS.md`](../AGENTS.md)
 > Umbrella status & dependency graph: [`../INSTRUCTIONS.md`](../INSTRUCTIONS.md)
 > Mission & principles: [`../VISION.md`](../VISION.md)
+> Open work: the [tracker](https://github.com/halheinrich/backgammon/issues), label `BgUiPrimitives_Razor`, with halheinrich/backgammon#249, halheinrich/backgammon#250 and halheinrich/backgammon#430.
+
+## What it is for
+
+Shared Blazor primitives for the Razor members and hosts, so that no member
+writes the same presentation rule, or the same browser-access policy, twice:
+
+- **`Notice`**, the one owner of alert-box markup;
+- **`BrowserStorage`** and **`ReportingBrowserStorage`**, the one guarded
+  access to `localStorage` and `sessionStorage`, and
+  **`BrowserStorageCondition`**, the app's one record that the browser
+  refused;
+- **`NoticeBox`** and **`BrowserStoragePlan`**, the test side of both, for
+  consumers' bUnit tests.
+
+Where to look:
+
+- Writing a `<Notice>` tag or a storage call: Using the library, then Pitfalls.
+- A new host: Using the library, Host obligations.
+- A consumer's test: Using the library, Test support, and Pitfalls, Consumer
+  tests.
+- Changing this library: Architecture, for why it has its shape, and Pitfalls,
+  Changing this library, for what must change together.
+
+Signatures and per-member contracts are the XML docs'; `Directory.Build.props`
+builds them on every build.
 
 ## Stack
 
@@ -14,21 +40,35 @@ Visual Studio 2026 on Windows.
 
 `D:\Users\Hal\Documents\Visual Studio 2026\Projects\backgammon\BgUiPrimitives_Razor\BgUiPrimitives_Razor.slnx`
 
+From this directory:
+
+```bash
+dotnet build BgUiPrimitives_Razor.slnx
+```
+
+```bash
+dotnet test BgUiPrimitives_Razor.slnx
+```
+
+The suite is bUnit and reads no `TestData`. The solution also carries
+`../BgDataTypes_Lib` and its test support, for the tests alone (see Layout), so
+that submodule must be checked out. Nothing here runs in a real browser: there
+is no app, so `Notice.razor.css` (see Pitfalls, Changing this library) and the
+storage calls' real answers are reached only through a host.
+
 ## Repo
 
 https://github.com/halheinrich/BgUiPrimitives_Razor — branch `main`.
 
 ## Depends on
 
-Standalone, and it stays that way: this library sits below every Razor member
-and both hosts, so that no member writes the same presentation rule, or the
-same browser-access policy, twice. Its primitives are domain-neutral:
-components, and the access to the browser that members and hosts share.
-Nothing in it may know about filters, quizzes, diagrams or XG — a primitive
-that needs a domain type is not a primitive and belongs in the member that
-owns the type.
+Standalone, and it stays that way: this library sits below the Razor members
+and hosts that use it. Its primitives are domain-neutral: components, and the
+access to the browser that members and hosts share. Nothing in it may know
+about filters, quizzes, diagrams or XG — a primitive that needs a domain type
+is not a primitive and belongs in the member that owns the type.
 
-It does place obligations on any **host** (see Public API, Host
+It does place obligations on any **host** (see Using the library, Host
 obligations): for its components, Bootstrap 5's stylesheet and a link to the
 host's own scoped-CSS bundle; for its browser-storage access, one
 registration.
@@ -101,8 +141,8 @@ real accessor through `BrowserStoragePlan` under the reporting access, with
 the umbrella's shared test loggers (`RecordingLogger`, `ThrowingLogger`, from
 `BgDataTypes_Lib.TestSupport`, which the solution carries for that reason).
 `BrowserStorageRegistrationTests` reads the registrations back from the
-service collection. Also holds the trim-posture pin and
-`TestSupportPostureTests`.
+service collection. Also holds the trim-posture pin
+(`BgUiPrimitivesRazorTrimPostureTests`) and `TestSupportPostureTests`.
 
 ## Architecture
 
@@ -135,8 +175,9 @@ state: the enclosing region decides that. So "how insistently" and "who
 announces" are one selector, `NoticeAnnouncement`, and a contradictory pair
 (enclosed *and* assertive) cannot be written, rather than being written and
 thrown. `ByEnclosingRegion` renders no live-region role or attribute on any
-element: one live region nested in another is announced twice by some screen
-readers, and is not what ARIA intends.
+element, so that no live region is nested in another. That nesting risks a
+double announcement is an assumption: it has not been tested with a screen
+reader, here or on the tracker.
 
 **The region is the content wrapper, never the box.** `role="status"` and
 `role="alert"` each carry an implicit `aria-atomic="true"` (WAI-ARIA 1.2
@@ -145,13 +186,6 @@ entire contents of the element" (§6.7, `aria-atomic`). With the role on the
 box, the close button would be part of what every dismissible notice says.
 The button is the box's control, not part of the message, so the role sits
 on `div.bg-notice-content` and the button is that region's sibling.
-
-**The live-region attributes belong to the component.** A caller's `role`,
-`aria-live`, `aria-atomic` or `aria-relevant` would land on the box and make
-it a second live region — around the notice's own, or inside the enclosing
-one — so each is refused, under every `Announcement`. That includes
-`aria-live="off"`: the way to say "something else announces this" is
-`ByEnclosingRegion`.
 
 ### One holder per dismissal
 
@@ -216,31 +250,38 @@ caller's selector does not change when `Dismissible` does.
 
 ### The caller's attributes
 
-Unmatched attributes are splatted onto the box element itself. The caller's
-`class` is merged *after* the component's own classes. `onclick`, `role` and
-the live-region attributes (`aria-live`, `aria-atomic`, `aria-relevant`)
-belong to the component and are refused with an `InvalidOperationException`.
+Unmatched attributes are splatted onto the box element itself: `id`, `style`,
+`data-*`, and any `aria-*` but the three below. The caller's `class` is merged
+*after* the component's own classes, and a blank one adds nothing.
+
+`onclick`, `role` and the live-region attributes (`aria-live`, `aria-atomic`,
+`aria-relevant`) belong to the component and are refused with an
+`InvalidOperationException`, in any casing and under every `Announcement`.
 `onclick` is the Razor silent-splat hazard — the component's would win
 without a word. `role` and the live-region attributes are worse than lost:
-the component no longer writes a role on the box, so a migrating caller's
-`role="alert"` left on the tag would *land*, and wrap the notice's own region
-in a second one.
+the component writes no role on the box, so a caller's `role="alert"` would
+*land*, and make the box a second live region, around the notice's own or
+inside the enclosing one. That includes `aria-live="off"`: the way to say
+"something else announces this" is `ByEnclosingRegion`.
 
 ### Browser storage access
 
-Hal's ruling on halheinrich/backgammon#374 (2026-10-08) is the policy, and
-`BrowserStorage` is its one owner. Each caller used to write its own access,
-under policies that disagreed: two latched after the first refusal, and some
-calls were unguarded. This section records how the type realises the ruling
-and why it has its shape.
+Hal ruled one guarded access under one policy on halheinrich/backgammon#374
+(2026-10-08), because callers writing their own had come to disagree on what a
+refusal means; the account is on that thread. `BrowserStorage` is the policy's
+one owner. This section records how the type realises the ruling and why it
+has its shape.
 
 **It owns the access and the refusal boundary, nothing else.** That is one
-interop call per operation, and the line between the browser's refusal and
-every other failure. Each caller's store keeps parsing, serializing, defaults
-and judging whether a stored value is valid. The type holds no state at all,
-so it cannot hold an app-wide condition: that is `BrowserStorageCondition`'s,
-fed by `ReportingBrowserStorage` (below). Each host keeps what the user is
-told and where.
+interop call per operation, on `localStorage` for `Local` and `sessionStorage`
+for `Session` — `ReadAsync` calls `getItem(key)`, `WriteAsync`
+`setItem(key, value)`, `RemoveAsync` `removeItem(key)`, and nothing else is
+called before or after — and the line between the browser's refusal and every
+other failure. Each caller's store keeps parsing, serializing, defaults and
+judging whether a stored value is valid. The type holds no state at all, so it
+cannot hold an app-wide condition: that is `BrowserStorageCondition`'s, fed by
+`ReportingBrowserStorage` (below). Each host keeps what the user is told and
+where.
 
 **Every requested operation is attempted.** There is no latch. A refusal
 disables nothing: not later reads, writes or removals, not the other area,
@@ -267,8 +308,7 @@ outcome.
 
 **Only the browser's refusal is caught.** A browser that blocks storage
 raises its error inside the interop call, and the error reaches .NET as a
-`JSException`. That is the precedent every member's guard was written against.
-It covers a throwing getter too:
+`JSException`. That covers a throwing getter too:
 - the standard has the `localStorage` and `sessionStorage` getters throw
   `SecurityError` when policy forbids persisting data;
 - interop resolves `localStorage.getItem` by property access inside the same
@@ -276,16 +316,19 @@ It covers a throwing getter too:
   `processJSCall`; read in `blazor.web.js` and `blazor.webassembly.js`
   10.0.10).
 
-Everything else propagates. Probes against the .NET 10 runtime, run when
-this type was introduced, showed that:
+Everything else propagates. Three observations decide this boundary, from
+probes against the .NET 10 runtime when this type was introduced (recorded in
+commit `6efaa9c`'s message; the probes themselves were not kept):
 - static rendering's JS runtime throws `InvalidOperationException` for any
   interop call;
-- `JSDisconnectedException` derives directly from `Exception`;
+- `JSDisconnectedException` is not a `JSException`;
 - a call that outlives the runtime's default interop timeout fails with
   `TaskCanceledException`, an `OperationCanceledException` (the control, with
   no timeout, stayed pending).
 
-None of these is an answer from the browser.
+None of these is an answer from the browser. `BrowserStorageTests` pins the
+library's half, that each propagates for every operation and area; it injects
+the exception, and establishes nothing about the runtime.
 
 **Usage errors throw at the call.** An undeclared `BrowserStorageArea`, a null
 key or a null value throws synchronously, before a task exists and before
@@ -332,13 +375,13 @@ is a key or a value, the empty string included.
     extension methods go. Everything public here is in one namespace, and
     this library declares nothing in a namespace it does not own.
 
-**The condition and the reporting access.** Both hosts wrote the host-side
-half of this policy — whether storage is unavailable, how a refusal is
-reported, the notice's dismissal — and each wrote it twice over, under one
-policy (`SPEC-notices.md` §2). Hal ruled that common code moves to one shared
-owner (halheinrich/backgammon#424, 2026-10-19). This library owns the
-accessor and its results, so it owns the condition and the access that
-reports to it.
+**The condition and the reporting access.** The host-side half of this
+policy — whether storage is unavailable, how a refusal is reported, the
+notice's dismissal (`SPEC-notices.md` §2) — is common to the hosts, and Hal
+ruled that common code moves to one shared owner
+(halheinrich/backgammon#424, 2026-10-19, comment 6262547637). This library
+owns the accessor and its results, so it owns the condition and the access
+that reports to it.
 
 - *`BrowserStorageCondition` is the one fact.* One per loaded app. The first
   refusal reported begins the occurrence; every later one is the same
@@ -355,9 +398,10 @@ reports to it.
   non-blank — what the refusal means for that caller, such as "the mix panel
   starts blank for this visit". It makes the accessor's one call. On a
   refusal it reports to the condition, then logs one warning carrying the
-  browser's exception, the operation, the key and the phrase, under one
-  message template. It returns the accessor's own result unchanged. A success
-  reports and logs nothing.
+  browser's exception, under one message template, which the phrase finishes:
+  `The browser refused a storage {Operation} of the key {Key}; {Consequence}.`
+  (`Operation` is `read`, `write` or `removal`). It returns the accessor's own
+  result unchanged. A success reports and logs nothing.
 - *Containment.* The logging call alone is wrapped. A logger that throws is
   contained there, after the occurrence is recorded, so a failing logging
   provider costs neither the occurrence nor the result.
@@ -380,9 +424,9 @@ the trim analyzer in its own build, so a trim-unsafe construct fails *this*
 repo's build in the change that introduced it. `BrowserStorage` sends and
 receives only `string` through interop (keys, values and `getItem`'s answer),
 so no library type is ever an interop type argument.
-`BgUiPrimitivesRazorTrimPostureTests` pins both declarations — the emitted
+`BgUiPrimitivesRazorTrimPostureTests` pins the declarations — the emitted
 assembly metadata for `IsTrimmable`, and the project file itself (linked into
-the test output) for the analyzer switch, which leaves no trace in the
+the test output) for both switches, the analyzer's leaving no trace in the
 assembly.
 
 ### The test-support project
@@ -390,23 +434,25 @@ assembly.
 **Why it exists.** A green build proves nothing about a `<Notice>` tag. A
 parameter name the component does not have — misspelt, or renamed under the
 caller — compiles clean, is splatted onto the box as a plain attribute, and
-the real parameter silently takes its default: polite, not dismissible
-(measured in two adopters, halheinrich/backgammon#248). Each adopter answered
-with a test helper of its own, and each helper knew this component's
-internals. The producer owns that knowledge, so the producer ships the reader.
+the real parameter silently takes its default: polite, not dismissible.
+XgFilter_Razor `2f46cca` (2026-09-20) records the case: a renamed parameter
+left both its assertive boxes silently polite under a green build.
+`NoticeBoxTests.ShouldBe_Fails_OnAMisspeltParameter_SplattedOntoTheBox`
+reproduces the trap through the real component. Adopters answered with test
+helpers of their own, and each helper knew this component's internals. The
+producer owns that knowledge, so the producer ships the reader.
 
 **Parse, then compare.** A `NoticeBox` cannot be obtained for anything but a
 well-formed notice: every way in reads the whole box and throws unless it is
 what the component renders. The structural rules — each component class
-exactly once; the announcement on the content and nowhere else, and no
-live-region attribute anywhere in the box; the close button outside the
-content; class, close button and box click handler all present or all absent;
-never a click handler on the content or on the close button — are therefore
-not something a consumer
-can forget to assert. `ShouldBe` then compares what was read with what the
-call site asked for, and states everything at once with nothing optional,
-because the failure it exists for changes a value the test did not think to
-check.
+exactly once; the announcement on the content and nowhere else, no live-region
+attribute anywhere in the box, and no live region nested in the content; the
+close button outside the content; class, close button and box click handler
+all present or all absent; never a click handler on the content or on the
+close button — are therefore not something a consumer can forget to assert.
+`ShouldBe` then compares what was read with what the call site asked for, and
+states everything at once with nothing optional, because the failure it exists
+for changes a value the test did not think to check.
 
 **"Reacts to no click" is read, not clicked.** The reader looks for the test
 renderer's click-handler marker on the box and the content rather than
@@ -431,9 +477,7 @@ reader that took its expectations from the implementation would agree with
 whatever the implementation did, and the product assembly would name a test
 assembly as a friend. The restatement is held honest from both sides:
 `NoticeTests` renders the real component through the reader for every
-combination, and `NoticeBoxTests` pins the reader against literal markup. A
-change to the rendered shape is made in `Notice`, in `NoticeBox`, and in
-`NoticeBoxTests`' literals — and in no consumer.
+combination, and `NoticeBoxTests` pins the reader against literal markup.
 
 **Dependencies, decided.** bunit, because a gesture is an action and only the
 test renderer can dispatch a click, because the finders take what it
@@ -444,24 +488,27 @@ types. **No test framework:** a failure is `NoticeAssertionException` or
 framework reports as a failed test with its message. An xunit reference
 here would ride into every consumer's test project, and xunit's next major
 is a different package identity declaring the same `Xunit.Assert` — a
-consumer moving to it would collide with the one pinned here. Consumers reach this project by `ProjectReference`, so the bunit
-and AngleSharp versions in this repository's `Directory.Packages.props` are
-the floor for theirs: a bump here is coordinated through the umbrella.
+consumer moving to it would collide with the one pinned here. Consumers reach
+this project by `ProjectReference`, so the bunit and AngleSharp versions in
+this repository's `Directory.Packages.props` are the floor for theirs: a bump
+here is coordinated through the umbrella.
 
 **Never in a product.** The assembly is declared
 `[UnsupportedOSPlatform("browser")]` (in its project file). Every project
-that can reach a browser publish — BgQuiz's WebAssembly client and each Razor
-member — declares `SupportedPlatform` `browser`, and in such a project the
-platform-compatibility analyzer reports any use of this assembly as `CA1416`,
-an error under the house `TreatWarningsAsErrors` (measured in a scratch
-project when introduced: error with the browser platform declared, clean
-without). Test projects declare no browser platform and are unaffected.
-`TestSupportPostureTests` pins the declaration, that the assembly claims no
-`IsTrimmable`, that it references no test framework, and that the library
-references no project. **Stated limit:** a server host declares no browser
-platform and is not stopped by the analyzer; that a member's non-test project
-never references this one is a claim about other repositories, and is the
-umbrella's to gate.
+that can reach a browser publish declares the browser platform — each Razor
+member in its project file, each WebAssembly client through its SDK — and in
+such a project the platform-compatibility analyzer reports any use of this
+assembly as `CA1416`, an error under the house `TreatWarningsAsErrors`
+(measured in a scratch project when introduced: error with the browser
+platform declared, clean without; no record of the run was kept). Test
+projects declare no browser platform and are unaffected.
+`TestSupportPostureTests` pins the declaration, not the analyzer's verdict; it
+also pins that the assembly claims no `IsTrimmable`, that it references no
+test framework, and that the library references no project. **Stated limit:**
+a server host declares no browser platform and is not stopped by the analyzer.
+That a member's non-test project never references this one is a claim about
+other repositories, and the umbrella gates it (`../tools/check-members.sh`,
+rule 8).
 
 ### The storage planner
 
@@ -484,17 +531,20 @@ that plans one.
 
 **Every storage call is the plan's, and nothing else is.**
 - The handlers match the six storage identifiers and no others. Every other
-  interop plan, and bUnit's invocation record, is left as it was.
+  interop plan, a test's catch-all included, and bUnit's invocation record are
+  left as they were.
 - They are not catch-all handlers. bUnit tries every non-catch-all handler
   before any catch-all (`BunitJSInterop.TryGetHandlerFor`,
   `src/bunit/JSInterop/BunitJSInterop.cs` at bUnit's tag `v2.8.6`), so a
   catch-all the test registers for its own calls never takes a storage call
   from the plan.
 - The plan answers storage calls in either `JSRuntimeMode`. An unexpected
-  call fails at the call with `BrowserStorageAssertionException`. That is not
-  a `JSException`, so the accessor propagates it rather than reading it as a
-  refusal. The call is also recorded, so `Verify` reports it even when the
-  code under test caught the exception.
+  call — nothing declared for it, one more than declared, or a different
+  operation, area, key or written value — fails at the call with
+  `BrowserStorageAssertionException`. That is not a `JSException`, so the
+  accessor propagates it rather than reading it as a refusal. The call is also
+  recorded, so `Verify` reports it even when the code under test caught the
+  exception.
 - `Verify` also reads bUnit's record of every invocation, and reports any
   storage call the plan did not answer. One comes from a handler the test
   registered itself, which spells an identifier; another is a call with a
@@ -539,10 +589,8 @@ at bUnit's tag `v2.8.6`, the version this repository pins):
 A held call has no timeout, deliberately. It is pending for as long as the
 test says, and a timer would make the result depend on how fast the test
 ran. Its completion runs the awaiting code's continuation asynchronously,
-never inside `Release`. The test waits for that continuation to finish
-before asserting on it: it awaits the operation, or an observation only
-the continuation produces, bounded by the test's normal timeout (Public
-API, the storage planner's call shapes).
+never inside `Release`, which is why a test must wait for that continuation
+(Pitfalls, Consumer tests).
 
 **Verified explicitly.** `Verify` is a call the test makes, as `ShouldBe` is.
 Verifying at disposal was rejected: it would throw from `Dispose`, and it
@@ -561,8 +609,7 @@ each for its own purpose:
   no identifier for it to take.
 
 `BrowserStoragePlanTests` holds the plan to the accessor by running the real
-one through it. A change to how the accessor reaches the browser is made in
-all three places and in no consumer.
+one through it.
 
 **What it is not.** It is no simulated storage: a plan holds no items, and a
 write does not make a later read stored. Each answer is the test's
@@ -570,82 +617,36 @@ statement of what the browser says. Nor does it need production API of its
 own: it reaches the accessor only through the interop calls the accessor
 already makes.
 
-## Public API
+## Using the library
 
 Namespace `BgUiPrimitives_Razor`. Consumers add `@using BgUiPrimitives_Razor`
 to `_Imports.razor`, and a host's `Program.cs` adds `using BgUiPrimitives_Razor;`
-for `AddBrowserStorage` and `AddReportingBrowserStorage`. The test-support surface, in
-`BgUiPrimitives_Razor.TestSupport`, is at the end of this section.
+for `AddBrowserStorage` and `AddReportingBrowserStorage`. The test-support
+surface, in `BgUiPrimitives_Razor.TestSupport`, is at the end of this section.
 
-### `NoticeKind`
+### A notice
 
-```csharp
-public enum NoticeKind { Information, Warning, Error, Success }
-```
+What a call site decides:
 
-Rendered as `alert-info`, `alert-warning`, `alert-danger`, `alert-success`.
-
-### `NoticeAnnouncement`
-
-```csharp
-public enum NoticeAnnouncement { Polite, Assertive, ByEnclosingRegion }
-```
-
-`Polite` (the default) renders `role="status"`: an outcome the user should
-understand. `Assertive` renders `role="alert"`: a gesture that failed, or a
-loss about to happen. `ByEnclosingRegion` renders no role and no live-region
-attribute: the notice sits inside a live region the caller keeps mounted, and
-that region announces it, as insistently as *it* says. The role, when there
-is one, is on the content wrapper, not the box.
-
-### `Notice`
-
-```csharp
-public sealed partial class Notice : ComponentBase
-{
-    [Parameter, EditorRequired] public NoticeKind Kind { get; set; }
-    [Parameter, EditorRequired] public RenderFragment? ChildContent { get; set; }
-    [Parameter] public NoticeAnnouncement Announcement { get; set; }  // default Polite
-    [Parameter] public bool Dismissible { get; set; }                 // default false
-    [Parameter] public bool Dismissed { get; set; }                   // bind only
-    [Parameter] public EventCallback<bool> DismissedChanged { get; set; }
-    [Parameter] public object? OccurrenceKey { get; set; }
-    [Parameter(CaptureUnmatchedValues = true)]
-    public IReadOnlyDictionary<string, object>? AdditionalAttributes { get; set; }
-
-    public override Task SetParametersAsync(ParameterView parameters);
-}
-```
-
-Contracts:
-
-- **`Kind`, `ChildContent`** — required; omitting either is `RZ2012`, an
-  error under the house `TreatWarningsAsErrors`.
-- **`Dismissible`** — `false` by default. When `false`: no close button, no
+- **`Kind` and `ChildContent`** are required; omitting either is `RZ2012`, an
+  error under the house `TreatWarningsAsErrors`. `Kind` is `Information`,
+  `Warning`, `Error` or `Success`, and decides nothing but the colour.
+- **`Announcement`**, by what the notice reports and where it sits
+  (`../SPEC-notices.md` section 3): `Polite`, the default, for an outcome the
+  user should understand; `Assertive` for a gesture that failed or a loss
+  about to happen; `ByEnclosingRegion` inside a live region the caller keeps
+  mounted.
+- **`Dismissible`**, `false` by default. When `false`: no close button, no
   click handler, no `alert-dismissible` class, and any dismissed state is
   ignored — the notice always renders.
-- **`Dismissed` / `DismissedChanged`** — supplied together or not at all
-  (`@bind-Dismissed`, or `@bind-Dismissed:get` / `@bind-Dismissed:set` over a
-  holder's methods). Supplying one without the other throws. When bound, the
-  component holds no dismissed state; the gesture raises
-  `DismissedChanged(true)` exactly once and the notice is hidden only if the
-  bound value comes back `true`. `DismissedChanged` is never raised for a
-  component-held dismissal.
-- **`OccurrenceKey`** — for a component-held dismissal only. A change
-  (compared with `object.Equals`; `null` is a key like any other) forgets the
-  dismissal, so the new occurrence shows fresh. Needed only where a new
-  occurrence can arrive while the notice stays rendered; a notice that is
-  removed from the render tree and rendered again starts fresh regardless.
-  Supplying it together with a bound `Dismissed` throws.
-- **`Announcement`** — `Polite` by default. Decides the role on the content
-  wrapper (`status`, `alert`, or no attribute at all); the box itself never
-  carries a role. There is no second parameter it could contradict.
-- **`AdditionalAttributes`** — `id`, `style`, `data-*` and the rest land on
-  the box element. `class` is merged after the component's classes (blank
-  adds nothing). `role`, `onclick`, `aria-live`, `aria-atomic` and
-  `aria-relevant` throw, in any casing and under every `Announcement`. Other
-  `aria-*` attributes pass through to the box.
-- A `Kind` or `Announcement` value outside its enum throws.
+- **Who holds the dismissal** (Architecture, One holder per dismissal). A
+  caller that holds it binds `@bind-Dismissed`, or `@bind-Dismissed:get` and
+  `@bind-Dismissed:set` over a holder's methods. The gesture then raises
+  `DismissedChanged(true)` exactly once, and the notice is hidden only if the
+  bound value comes back `true`.
+
+Everything else on the tag lands on the box (Architecture, The caller's
+attributes).
 
 Rendered shape (the scope attribute CSS isolation stamps on each element is
 omitted):
@@ -675,12 +676,11 @@ child of the box, present in every shape. The close button is
 dismissed, the component renders nothing.
 
 This shape is documented for hosts, stylesheets and this repository. **A
-consumer's test does not read it:** it asserts through `NoticeBox` (below),
-which is the shape's one reader outside the component.
+consumer's bUnit test does not read it:** it asserts through `NoticeBox`
+(below).
 
-### Call shapes
-
-A gate reason or live indicator — not dismissible, nothing else to say:
+Call shapes. A gate reason or live indicator — not dismissible, nothing else
+to say:
 
 ```razor
 <Notice Kind="NoticeKind.Warning" Announcement="NoticeAnnouncement.Assertive" class="zero-match-notice">
@@ -690,8 +690,11 @@ A gate reason or live indicator — not dismissible, nothing else to say:
 
 A notice inside a live region the caller keeps mounted — the region is
 rendered unconditionally and only its content swaps, because a live region
-that first appears in the very render that fills it is announced unreliably.
-The region announces; the notice adds none of its own:
+that first appears in the very render that fills it may not be announced. That
+rests on one observation of one box (halheinrich/backgammon#171), not on a
+screen-reader test, and a self-announcing notice rendered under a condition is
+just such a region (halheinrich/backgammon#249). The region announces; the
+notice adds none of its own:
 
 ```razor
 <div id="loadedNotice" role="status">
@@ -728,117 +731,17 @@ A notice whose occurrence outlives the page — the owner holds the dismissal:
 
 (The holder's member names above are illustrative; the shape is what matters.)
 
-### `BrowserStorage`
+### Browser storage
 
-```csharp
-public enum BrowserStorageArea { Local, Session }
+Inject `ReportingBrowserStorage`, and each refusal reaches
+`BrowserStorageCondition` and the log before the result returns. `BrowserStorage`
+takes the same arguments, less the consequence phrase, answers the same
+results and reports nothing: it is for a caller that reports refusals its own
+way, as `XgFilter_Razor`'s filter storage does through its host's sink.
 
-public sealed class BrowserStorage
-{
-    public BrowserStorage(IJSRuntime js);
-
-    public Task<BrowserStorageReadResult> ReadAsync(BrowserStorageArea area, string key);
-    public Task<BrowserStorageWriteResult> WriteAsync(BrowserStorageArea area, string key, string value);
-    public Task<BrowserStorageWriteResult> RemoveAsync(BrowserStorageArea area, string key);
-}
-
-public sealed class BrowserStorageReadResult
-{
-    [MemberNotNullWhen(true, nameof(Value))]    public bool IsStored { get; }
-                                                 public bool IsAbsent { get; }
-    [MemberNotNullWhen(true, nameof(Refusal))]  public bool IsRefused { get; }
-    public string? Value { get; }          // the stored string when IsStored, possibly ""
-    public JSException? Refusal { get; }   // the browser's exception, as raised, when IsRefused
-}
-
-public sealed class BrowserStorageWriteResult   // a write or a removal
-{
-    [MemberNotNullWhen(false, nameof(Refusal))] public bool Succeeded { get; }
-    [MemberNotNullWhen(true, nameof(Refusal))]  public bool IsRefused { get; }
-    public JSException? Refusal { get; }
-}
-
-public sealed class BrowserStorageCondition   // one per loaded app
-{
-    public bool HasOccurred { get; }           // a refusal this visit; true until a reload
-    public bool IsNoticeDismissed { get; }     // only ever true while HasOccurred is
-
-    public void ReportRefused(JSException refusal);
-    public void DismissNotice();               // InvalidOperationException before any occurrence
-    public IDisposable Attach(Action observer);
-}
-
-public sealed class ReportingBrowserStorage
-{
-    public ReportingBrowserStorage(
-        BrowserStorage storage, BrowserStorageCondition condition, ILogger<ReportingBrowserStorage> logger);
-
-    public Task<BrowserStorageReadResult> ReadAsync(BrowserStorageArea area, string key, string consequence);
-    public Task<BrowserStorageWriteResult> WriteAsync(BrowserStorageArea area, string key, string value, string consequence);
-    public Task<BrowserStorageWriteResult> RemoveAsync(BrowserStorageArea area, string key, string consequence);
-}
-
-public static class BrowserStorageServiceCollectionExtensions
-{
-    public static IServiceCollection AddBrowserStorage(this IServiceCollection services);
-    public static IServiceCollection AddReportingBrowserStorage(this IServiceCollection services);
-}
-```
-
-Contracts:
-
-- **One call per operation**, on the area's object (`localStorage` for
-  `Local`, `sessionStorage` for `Session`):
-  - `ReadAsync` calls `getItem(key)`;
-  - `WriteAsync` calls `setItem(key, value)`;
-  - `RemoveAsync` calls `removeItem(key)`.
-
-  Nothing else is called, before or after. These calls are documented for
-  this repository: they are the library's implementation, restated in
-  `BrowserStoragePlan` and pinned by `BrowserStorageTests`. **A consumer's
-  test does not repeat them.** It plans storage through `BrowserStoragePlan`
-  (below), which answers them.
-- **A read** is exactly one of `IsStored`, `IsAbsent` and `IsRefused`.
-  - `IsStored` with `Value == ""` is an item holding the empty string. Only
-    `IsAbsent` means there is no item.
-  - `Value` is null unless the item is stored, and `Refusal` is null unless
-    the read was refused.
-- **A write or a removal** is exactly one of `Succeeded` and `IsRefused`.
-  Removing a key with no item succeeds.
-- **A refusal** is a result, never an exception. `Refusal` is the very
-  `JSException` the call raised. Nothing is remembered, so the next call is
-  made.
-- **Thrown, synchronously, from the call and before any interop:**
-  `ArgumentOutOfRangeException` for an undeclared area, and
-  `ArgumentNullException` for a null key or value. Any other exception from
-  the call (anything that is not a `JSException`) propagates unchanged.
-- **Results** are immutable and constructed only by `BrowserStorage`. Their
-  equality is reference equality.
-- **`AddBrowserStorage`** registers `BrowserStorage` scoped; a second call
-  adds nothing. It returns the collection.
-- **`BrowserStorageCondition`**: the first `ReportRefused` sets
-  `HasOccurred` and notifies; later ones change nothing. `DismissNotice`
-  sets `IsNoticeDismissed` and notifies; again changes nothing; before any
-  occurrence it throws `InvalidOperationException` and records nothing.
-  `Attach` calls the observer once before returning, then after each change,
-  until the handle is disposed (twice is harmless); observers are told from
-  a copy. Null arguments throw `ArgumentNullException`. Not thread-safe.
-- **`ReportingBrowserStorage`**: each operation makes the accessor's one
-  call. On a refusal it reports to the condition, then logs one warning,
-  with the refusal as its exception:
-  `The browser refused a storage {Operation} of the key {Key}; {Consequence}.`
-  (`Operation` is `read`, `write` or `removal`). It then returns the
-  accessor's result unchanged. A logger that throws is contained around the
-  logging call. A success reports and logs nothing. A null or blank
-  `consequence` throws `ArgumentException` at the call, before any call.
-  Everything the accessor throws or propagates passes through unchanged and
-  unreported.
-- **`AddReportingBrowserStorage`** registers `ReportingBrowserStorage` and
-  `BrowserStorageCondition` scoped, and calls `AddBrowserStorage`; a second
-  call adds nothing. It returns the collection.
-
-Call shapes. A store restores a value under its own parser and default; the
-refusal is reported and logged before the result returns:
+Call shapes. `Storage` is the injected `ReportingBrowserStorage`; the store's
+member names are illustrative. A store restores a value under its own parser
+and default:
 
 ```csharp
 var read = await Storage.ReadAsync(BrowserStorageArea.Local, StorageKey,
@@ -858,9 +761,25 @@ await Storage.WriteAsync(BrowserStorageArea.Local, StorageKey, ToJson(changed),
     "the settings hold for this visit only");
 ```
 
-(`Storage` is the injected `ReportingBrowserStorage`; the store's member
-names are illustrative. `BrowserStorage` itself takes the same arguments,
-less the phrase, answers the same results, and reports nothing.)
+A page draws the app's one notice from the condition. It attaches in a
+lifecycle method, because a refusal can arrive while no gesture of the page is
+running, and disposes the attachment with the page. The condition holds the
+dismissal, so it is bound; the id and the wording are the host's:
+
+```csharp
+_storageAttachment = StorageCondition.Attach(() => _ = InvokeAsync(StateHasChanged));
+```
+
+```razor
+@if (StorageCondition.HasOccurred)
+{
+    <Notice id="storageUnavailableNotice" Kind="NoticeKind.Warning" Dismissible="true"
+            @bind-Dismissed:get="StorageCondition.IsNoticeDismissed"
+            @bind-Dismissed:set="_ => StorageCondition.DismissNotice()">
+        …
+    </Notice>
+}
+```
 
 ### Host obligations
 
@@ -876,66 +795,34 @@ less the phrase, answers the same results, and reports nothing.)
   constructs injects `BrowserStorage`: `builder.Services.AddBrowserStorage();`;
   when it injects `ReportingBrowserStorage` or `BrowserStorageCondition`:
   `builder.Services.AddReportingBrowserStorage();`, which also registers
-  `BrowserStorage`. Register it in every project that creates such a component or service. In
-  a Blazor Web App that means the client, and also the server if the server
-  prerenders or runs that component. A missing registration fails when the
-  component or service is created.
+  `BrowserStorage`. Register it in every project that creates such a component
+  or service. In a Blazor Web App that means the client, and also the server if
+  the server prerenders or runs that component. A missing registration fails
+  when the component or service is created.
 
 ### Test support — `BgUiPrimitives_Razor.TestSupport`
 
 For a consumer's **test** project only, by `ProjectReference` to
 `BgUiPrimitives_Razor.TestSupport/BgUiPrimitives_Razor.TestSupport.csproj`.
-It brings bunit and AngleSharp at this repository's versions and no test
-framework.
+(XgFilter_Razor's own test support builds on it, under the same rule.) It brings
+bunit and AngleSharp at this repository's versions and no test framework. Both
+tools work on bUnit's renderer; a Playwright e2e test, in a real browser, has
+neither.
 
 #### The notice reader
 
-```csharp
-public sealed class NoticeBox
-{
-    // Finding — each reads the whole box and throws unless it is a well-formed notice.
-    public static NoticeBox From(IElement element);
-    public static NoticeBox ById(IRenderedComponent<IComponent> rendered, string id);
-    public static NoticeBox ByMarkerClass(IRenderedComponent<IComponent> rendered, string markerClass);
-    public static IReadOnlyList<NoticeBox> AllIn(IRenderedComponent<IComponent> rendered);
+`NoticeBox` finds a notice (`From`, `ById`, `ByMarkerClass`, `AllIn`), reads it
+(`Kind`, `Announcement`, `Dismissible`, `CallerClasses`, `CallerAttributes`,
+`Element`, `Content`), asserts it (`ShouldBe`) and acts on it (`Dismiss`). A
+failure is `NoticeAssertionException`.
 
-    // What was read.
-    public IElement Element { get; }                        // the box: the caller's id, style, data-*
-    public IElement Content { get; }                        // what the caller put inside, nothing else
-    public NoticeKind Kind { get; }
-    public NoticeAnnouncement Announcement { get; }
-    public bool Dismissible { get; }
-    public IReadOnlyList<string> CallerClasses { get; }     // without the component's own
-    public IReadOnlyList<string> CallerAttributes { get; }  // names; "class" only if one was passed
-
-    // Asserting and acting.
-    public NoticeBox ShouldBe(NoticeKind kind, NoticeAnnouncement announcement,
-                              bool dismissible, params string[] callerAttributes);
-    public void Dismiss(NoticeDismissGesture gesture);
-}
-
-public enum NoticeDismissGesture { CloseButton, WholeBox }
-
-public sealed class NoticeAssertionException : Exception { }   // raised only by this assembly
-```
-
-Contracts:
-
-- **Every `NoticeBox` is a well-formed notice.** `From`, `ById`,
-  `ByMarkerClass` and `AllIn` throw `NoticeAssertionException` on an element
-  that is not a notice box (the identifier is on something else, or the box
-  is hand-written) and on a box that breaks a structural rule: the
-  component's classes each exactly once (a call site that still passes
-  `alert` or an `alert-*` class fails here); the announcement on the content
-  and nowhere else, with no `aria-live`, `aria-atomic` or `aria-relevant` on
-  any element and no live region nested in the content; the close button
-  outside the content; dismissible class, close button and box click handler
-  all present or all absent; no click handler on the content or on the close
-  button.
+- **Every way in reads the whole box**, and throws on an element that is not a
+  notice box (the identifier is on something else, or the box is hand-written)
+  and on a box that breaks a structural rule (Architecture, Parse, then
+  compare). A call site that still passes `alert` or an `alert-*` class fails
+  here.
 - **`ById` / `ByMarkerClass`** — exactly one element must carry the
-  identifier. `ByMarkerClass` takes one class name of the call site's own and
-  throws `ArgumentException` for a class the component owns. Any
-  `IRenderedComponent<T>` converts to the parameter type.
+  identifier. Any `IRenderedComponent<T>` converts to the parameter type.
 - **`AllIn`** — every notice, in document order; empty when none is shown.
   Hand-written alerts are not notices and are not returned.
 - **`ShouldBe`** — all of it, every time: the call site's `Kind`, its
@@ -951,7 +838,9 @@ Contracts:
 - **`Dismiss`** — a real click through the test renderer on the close button
   or the box. Throws `NoticeAssertionException` on a notice that is not
   dismissible. Asserts nothing about what follows — a caller-held dismissal
-  may decline.
+  may decline. It returns `void`, so a test cannot await the dismissal: while
+  earlier work holds the renderer the click is queued, and `Dismiss` returns
+  before the notice has gone (halheinrich/backgammon#387).
 - **A `NoticeBox` is a reading of one render.** After `Dismiss`, or anything
   else that re-renders, find the notice again.
 - **Values are the caller's to read** — `box.Element.GetAttribute("style")`,
@@ -1008,111 +897,23 @@ means.
 
 #### The storage planner
 
-```csharp
-public sealed class BrowserStoragePlan
-{
-    public static BrowserStoragePlan On(BunitJSInterop jsInterop);
+`BrowserStoragePlan.On(JSInterop)` puts a plan on the test's runtime, and the
+test registers `BrowserStorage` as a host does. `ExpectRead`, `ExpectWrite` and
+`ExpectRemove` each declare one call in the accessor's terms with the browser's
+answer — `BrowserStorageReadAnswer.Stored(value)`, `.Absent`, `.Refused`;
+`BrowserStorageWriteAnswer.Succeeded`, `.Refused` — given at the call, so the
+accessor's operation has completed when it returns. `times` (default 1)
+declares that many identical calls, each answered alike. `ExpectHeldRead`,
+`ExpectHeldWrite` and `ExpectHeldRemove` declare a call the test holds pending
+and completes with `Release`; `IsReached` says whether it was made.
+`RequireOrder` names a sequence. `Verify` ends the test; it changes nothing and
+may be called more than once. A failure is `BrowserStorageAssertionException`,
+and each type's `ToString` describes it for the message.
 
-    // Answered at the call.
-    public BrowserStorageExpectation ExpectRead(BrowserStorageArea area, string key,
-                                                BrowserStorageReadAnswer answer, int times = 1);
-    public BrowserStorageExpectation ExpectWrite(BrowserStorageArea area, string key, string value,
-                                                 BrowserStorageWriteAnswer answer, int times = 1);
-    public BrowserStorageExpectation ExpectRemove(BrowserStorageArea area, string key,
-                                                  BrowserStorageWriteAnswer answer, int times = 1);
-
-    // Held pending until the test releases them.
-    public BrowserStorageHeldRead ExpectHeldRead(BrowserStorageArea area, string key);
-    public BrowserStorageHeldWrite ExpectHeldWrite(BrowserStorageArea area, string key, string value);
-    public BrowserStorageHeldWrite ExpectHeldRemove(BrowserStorageArea area, string key);
-
-    public void RequireOrder(params BrowserStorageExpectation[] sequence);
-    public void Verify();
-}
-
-public sealed class BrowserStorageReadAnswer
-{
-    public static BrowserStorageReadAnswer Stored(string value);   // the empty string included
-    public static BrowserStorageReadAnswer Absent { get; }
-    public static BrowserStorageReadAnswer Refused { get; }
-}
-
-public sealed class BrowserStorageWriteAnswer                    // a write or a removal
-{
-    public static BrowserStorageWriteAnswer Succeeded { get; }
-    public static BrowserStorageWriteAnswer Refused { get; }
-}
-
-public class BrowserStorageExpectation { }                       // created only by a plan
-
-public sealed class BrowserStorageHeldRead : BrowserStorageExpectation
-{
-    public bool IsReached { get; }
-    public void Release(BrowserStorageReadAnswer answer);
-}
-
-public sealed class BrowserStorageHeldWrite : BrowserStorageExpectation   // a write or a removal
-{
-    public bool IsReached { get; }
-    public void Release(BrowserStorageWriteAnswer answer);
-}
-
-public sealed class BrowserStorageAssertionException : Exception { }      // raised only by this assembly
-```
-
-Each type's `ToString` describes it, for failure messages.
-
-Contracts:
-
-- **`On`** — puts the plan on the test's `JSInterop`. From then on it answers
-  every storage call made there, in either `JSRuntimeMode`, and no other
-  call. A second plan on the same `JSInterop` throws
-  `InvalidOperationException`. The test registers `BrowserStorage` as a host
-  does (`Services.AddBrowserStorage()`), so the real accessor runs over that
-  runtime.
-- **`Expect…`** — each declares one call in the accessor's terms and the
-  browser's answer to it. The answer is given at the call: the accessor's
-  operation has completed when it returns. `times` (default 1) declares that
-  many identical calls, each answered alike. An undeclared area, a null key,
-  value or answer, or a `times` below one throws at once and declares
-  nothing. A key or value may be any other string, the empty string
-  included.
-- **Matching.** A call is answered by the earliest-declared expectation, not
-  yet used up, with the same operation, area, key and — for a write — value.
-  Successive answers for one call are given in the order declared; calls that
-  differ in any of those respects keep no order between them.
-- **An unexpected call** is one that matches no expectation: nothing declared
-  for it, one more than declared, or a different operation, area, key or
-  written value. It fails at the call with `BrowserStorageAssertionException`,
-  which the accessor propagates, and it is recorded for `Verify`.
-- **A refusal** reaches the accessor as a `JSException` raised for that one
-  call, so the accessor's result is refused. Each refused call gets its own
-  exception.
-- **`RequireOrder`** — every call matched to an earlier expectation in the
-  sequence comes before every call matched to a later one. It takes two or
-  more distinct expectations of this plan, and throws `ArgumentException`
-  otherwise. Expectations named in no sequence keep no order.
-- **`Verify`** — throws `BrowserStorageAssertionException` if any of these
-  happened:
-  - an unexpected call, whether or not the code under test caught its
-    failure;
-  - an expectation made fewer times than declared;
-  - a required order broken;
-  - a storage call in bUnit's record that the plan did not answer.
-
-  The message states every difference, and the storage calls made in order.
-  A reached held call counts as made, released or not. `Verify` changes
-  nothing and may be called more than once.
-- **Held calls** — each is one call. `IsReached` becomes true when the code
-  under test makes it, and the operation is then pending until `Release`.
-  `Release` before the call is reached throws
-  `BrowserStorageAssertionException`, and a second `Release` throws
-  `InvalidOperationException`. The awaiting code resumes asynchronously,
-  after `Release` returns. There is no timeout: an unreleased held call never
-  completes.
-- **Nothing else on the `JSInterop` changes.** Other interop plans answer
-  their own calls, a test's catch-all included, and bUnit's invocation
-  record keeps every call.
+A planned refusal reaches the accessor as a `JSException` raised for that one
+call, so the result is refused. The test cannot reach that exception: a store
+that logs the refusal with its exception attached cannot be asserted to log the
+one raised (halheinrich/backgammon#378).
 
 Call shapes, in a consumer's test. The store's key is the store's own to
 name; the interop calls are not:
@@ -1143,19 +944,12 @@ public class FilterStoreTests : BunitContext
 }
 ```
 
-A test of a held call asserts only after the continuation it is about has
-**finished**, and it proves that by awaiting it, bounded by the test's
-normal timeout (`BunitContext.DefaultWaitTimeout`). Releasing a call does
-not run its continuation, and releasing two calls in an order does not
-finish their continuations in that order. A render that already shows the
-expected state proves nothing either: the state may hold before the
-continuation runs, and a stale completion the code rightly rejects renders
-nothing at all.
-
-An older save completing after a newer one. Each Apply is a click, and
-`ClickAsync` returns a task that completes when the event handler is done
-(bUnit 2.8.6's documentation of `EventHandlerDispatchExtensions.ClickAsync`).
-So the test keeps both tasks and finishes them one at a time:
+An older save completing after a newer one. A test of a held call asserts only
+after the continuation it is about has finished (Pitfalls, Consumer tests).
+Each Apply is a click, and `ClickAsync` returns a task that completes when the
+event handler is done (bUnit 2.8.6's documentation of
+`EventHandlerDispatchExtensions.ClickAsync`), so the test keeps both tasks and
+finishes them one at a time:
 
 ```csharp
 var older = _storage.ExpectHeldWrite(BrowserStorageArea.Local, StorageKey, jsonA);
@@ -1181,10 +975,7 @@ _storage.Verify();
 A restoration held pending across a change, then released. The read starts
 in a lifecycle method, so there is no task of it to keep. The test waits
 instead for an observation that only the restoration's continuation
-produces, and bounds that wait too. `WaitForAssertion` and `WaitForState`
-are not that observation when the continuation may not render: they check
-once at the start and then only after each render (bUnit's
-`src/bunit/Extensions/WaitForHelpers/WaitForHelper.cs` at tag `v2.8.6`):
+produces, and bounds that wait too:
 
 ```csharp
 var restore = _storage.ExpectHeldRead(BrowserStorageArea.Local, StorageKey);
@@ -1207,28 +998,49 @@ settled, including a restoration that rejected a stale result.)
 
 ## Pitfalls
 
-- **A consumer test that names `bg-notice-content`, `btn-close`, an `alert-*`
-  class or a role is a defect — use `NoticeBox`.** That includes a selector
-  (`#id > .bg-notice-content`, `button.btn-close`), a class string
-  (`"alert-danger"`), a role string (`"status"`), a click on the close button
-  by selector, and a hand-rolled list of the attributes the renderer stamps.
-  Each is this component's internals restated where a change here cannot
-  reach it. The caller's own `id`, marker classes and attribute values are
-  not the component's and are fine.
-- **The test-support project is for test projects.** No product project —
-  no Razor member, no host, no WebAssembly client — may reference it: it
-  carries bunit. A project that declares the browser platform fails to build
-  with `CA1416` if it uses it; a server host is not stopped by anything in
-  this repository, so do not try.
-- **Assert every notice with `ShouldBe`, including the ones "obviously
-  right".** The silent-splat trap changes nothing the compiler or a casual
-  test sees. And write `ShouldBe`'s arguments from what the call site is
-  *meant* to say, not from what it renders.
-- **Changing what `Notice` renders** means changing `NoticeBox` and the
-  literal boxes in `NoticeBoxTests` in the same commit. A new structural rule
-  in `NoticeBox` needs its failing case there too: an assertion never seen
-  failing is unproven.
+### Writing a notice
 
+- **Deciding `Dismissible` is a model question, not a colour question.** Use
+  the gate-reason test in `../SPEC-notices.md` section 1. The default is
+  `false` on purpose.
+- **`ByEnclosingRegion` is a claim the component cannot check.** It renders
+  no role on the caller's word that a mounted live region encloses the
+  notice. Used with no such region, the notice is announced by nobody. The
+  enclosing region must already be in the DOM before the notice fills it —
+  render the region unconditionally and the `<Notice>` conditionally inside. A
+  dismissible one puts its close button inside that region, so the button's
+  name is likely part of what is announced (unmeasured;
+  halheinrich/backgammon#249).
+- **Never nest a self-announcing notice in a live region**, and never reach
+  for `aria-live="off"` to quiet one — it throws. Say `ByEnclosingRegion`.
+- **The role is not on the box.** A test or selector that reads `role` on the
+  element found by the notice's id — `box.GetAttribute("role")`,
+  `div.alert-warning[role=alert]` — finds nothing. A test does not read the
+  role at all: it states the `NoticeAnnouncement` to `NoticeBox.ShouldBe`.
+- **A caller-held dismissal needs both halves.** `Dismissed="@x"` alone and
+  `DismissedChanged="@f"` alone both throw. There is deliberately no
+  "notify me but hold it yourself" mode: that is two holders.
+- **A component-held dismissal lives as long as the component instance.** It
+  is lost — correctly — when the notice leaves the render tree. If the
+  occurrence must survive navigation, the component is the wrong holder: bind
+  `Dismissed` to an app-scoped owner.
+- **A replaced occurrence needs `OccurrenceKey`.** If the caller's condition
+  stays true while one error replaces another, the notice is the same
+  instance and a dismissed one stays dismissed. Name the occurrence (compared
+  with `object.Equals`; `null` is a key like any other).
+- **Custom interactive content needs `tabindex`.** An element made clickable
+  without being natively interactive (a `span` with `@onclick`) is
+  transparent to the pointer inside a dismissible notice unless it carries
+  `tabindex` — which it needs anyway to be keyboard-reachable. Prefer a real
+  `button`.
+- **A click on interactive content in a dismissible notice does not bubble to
+  Blazor handlers outside the notice.** The wrapper's stop-propagation is what
+  keeps it from dismissing; an ancestor relying on seeing it will not. A click
+  on plain text lands on the box, and does bubble.
+- **Text in a dismissible notice cannot be selected with the mouse.** It is
+  the ruled price of the whole box being the dismiss target
+  (`../SPEC-notices.md` section 6, E). Content the user must be able to copy
+  does not belong in a dismissible notice.
 - **Migrating a hand-written box.** Delete the old `role="…"`, `aria-live`,
   `@onclick` and `@onclick:stopPropagation` with the markup they sat on; the
   `role`, the live-region attributes and `@onclick` throw if left on the
@@ -1240,67 +1052,20 @@ settled, including a restoration that rejected a stale result.)
   `Assertive`. Drop `alert`, `alert-*` and `alert-dismissible` from the
   `class` you pass — they would be emitted twice — and keep only marker and
   spacing classes.
-- **The role is not on the box.** A test or selector that reads `role` on the
-  element found by the notice's id — `box.GetAttribute("role")`,
-  `div.alert-warning[role=alert]` — finds nothing. A test does not read the
-  role at all: it states the `NoticeAnnouncement` to `NoticeBox.ShouldBe`.
-- **`ByEnclosingRegion` is a claim the component cannot check.** It renders
-  no role on the caller's word that a mounted live region encloses the
-  notice. Used with no such region, the notice is announced by nobody. The
-  enclosing region must already be in the DOM before the notice fills it —
-  render the region unconditionally and the `<Notice>` conditionally inside.
-- **Never nest a self-announcing notice in a live region**, and never reach
-  for `aria-live="off"` to quiet one — it throws. Say `ByEnclosingRegion`.
-- **Deciding `Dismissible` is a model question, not a colour question.** Use
-  the gate-reason test in `../SPEC-notices.md` section 1. The default is
-  `false` on purpose.
-- **A caller-held dismissal needs both halves.** `Dismissed="@x"` alone and
-  `DismissedChanged="@f"` alone both throw. There is deliberately no
-  "notify me but hold it yourself" mode: that is two holders.
-- **A component-held dismissal lives as long as the component instance.** It
-  is lost — correctly — when the notice leaves the render tree. If the
-  occurrence must survive navigation, the component is the wrong holder: bind
-  `Dismissed` to an app-scoped owner.
-- **A replaced occurrence needs `OccurrenceKey`.** If the caller's condition
-  stays true while one error replaces another, the notice is the same
-  instance and a dismissed one stays dismissed. Name the occurrence.
-- **Custom interactive content needs `tabindex`.** An element made clickable
-  without being natively interactive (a `span` with `@onclick`) is
-  transparent to the pointer inside a dismissible notice unless it carries
-  `tabindex` — which it needs anyway to be keyboard-reachable. Prefer a real
-  `button`.
-- **Clicks inside a dismissible notice's content do not bubble to Blazor
-  handlers outside the notice.** The wrapper's stop-propagation is what keeps
-  them from dismissing; an ancestor relying on seeing them will not.
-- **Text in a dismissible notice cannot be selected with the mouse.** The
-  whole box is the dismiss target (ruled), and the pointer transparency that
-  makes it so applies to the text. Content the user must be able to copy does
-  not belong in a dismissible notice.
-- **Do not add a handler to the close button.** Its click already reaches the
-  box's handler; a second one reports a caller-held dismissal twice.
-- **Editing `Notice.razor.css`.** Its selectors are half of the
-  inner-content rule and no bUnit test can execute them. After any change,
-  check in a real browser that a click on plain text targets the box and a
-  click on an inner link or button targets that element.
-- **Adding a `NoticeKind` or `NoticeAnnouncement` value** means adding its arm
-  to the component's switch — an enum value without one throws at render —
-  and its reading to `NoticeBox`, without which
-  `NoticeBoxTests.EveryDeclaredKind_AndAnnouncement_IsReadBackFromTheRealComponent`
-  fails.
-- **Do not move the role back onto the box, or the close button into the
-  wrapper.** Either puts the button's accessible name inside an atomic live
-  region, so every dismissible notice would read "Dismiss this message,
-  button" after its text.
+
+### Browser storage
 
 - **Do not latch around browser storage.** A caller that skips its next call
   after a refusal re-creates what was ruled out. One example is a "storage
   unavailable" flag consulted before calling. Report each refusal to
-  `BrowserStorageCondition` (`ReportingBrowserStorage` does) and keep
-  calling. The condition remembers that a refusal *happened*, for the
-  notice; nothing consults it before a call.
+  `BrowserStorageCondition` (`ReportingBrowserStorage` does) and keep calling.
+  The condition remembers that a refusal *happened*, for the notice, and gates
+  nothing; a member that consulted it before a call, or a second holder beside
+  it, would be the per-app latch again.
 - **`read.Value ?? fallback` loses the refusal.** It yields the right value
-  and drops the fact. A store whose host reports refusals checks `IsRefused`
-  first.
+  and drops the fact. On the plain `BrowserStorage`, a store whose host reports
+  refusals checks `IsRefused` first; `ReportingBrowserStorage` has already
+  reported it.
 - **Parse outside the storage result.** Read first, then parse `Value` under
   your own parser's catch. A parse failure is invalid stored data, which is
   the store's to handle; it never belongs in the refused branch. A
@@ -1315,27 +1080,40 @@ settled, including a restoration that rejected a stale result.)
   A storage call there throws `InvalidOperationException`, which propagates,
   because it is not a refusal. Call from `OnAfterRenderAsync` or an event
   handler.
-- **Null is not a value.** `WriteAsync` with a null value throws. To store
-  nothing, call `RemoveAsync`.
-- **Register browser storage through `AddBrowserStorage`, not by hand.** The
-  lifetime is part of the contract. On a server, a singleton would hold the
-  first circuit's runtime.
-- **App-wide storage state is `BrowserStorageCondition`'s, and it gates
-  nothing.** The occurrence and the notice's dismissal live there and
-  nowhere else. A member that consulted it before a call, or a second holder
-  beside it, would be the per-app latch again.
-- **A consumer test that names `localStorage`, `sessionStorage`, `getItem`,
-  `setItem` or `removeItem` is a defect — use `BrowserStoragePlan`.** That
-  includes a `JSInterop.Setup` or `SetupVoid` for one of them, and a read of
-  `JSInterop.Invocations` by one of them. Each restates this library's
-  interop where a change here cannot reach it. A handler that answers a
-  storage call in the plan's place also fails `Verify`. The store's own key
-  is not the library's, and is fine.
-- **Changing how `BrowserStorage` reaches the browser** — a JavaScript
-  module, another argument order, an extra call — means changing
-  `BrowserStoragePlan`'s restated wire and `BrowserStorageTests`' literals in
-  the same commit. `BrowserStoragePlanTests` fails until the plan agrees with
-  the accessor. No consumer changes.
+- **Register browser storage through `AddBrowserStorage` or
+  `AddReportingBrowserStorage`, not by hand.** The lifetime is part of the
+  contract. On a server, a singleton would hold the first circuit's runtime.
+
+### Consumer tests
+
+- **A consumer's bUnit test that names `bg-notice-content`, `btn-close`, an
+  `alert-*` class or a role is a defect — use `NoticeBox`.** That includes a
+  selector (`#id > .bg-notice-content`, `button.btn-close`), a class string
+  (`"alert-danger"`), a role string (`"status"`), a click on the close button
+  by selector, and a hand-rolled list of the attributes the renderer stamps.
+  Each is this component's internals restated where a change here cannot
+  reach it. The caller's own `id`, marker classes and attribute values are
+  not the component's and are fine. XgFilter_Razor's tests still carry such a
+  helper (halheinrich/backgammon#250), and BgQuiz_Blazor's `PageTests` such
+  clicks.
+- **Assert every notice with `ShouldBe`, including the ones "obviously
+  right".** The silent-splat trap changes nothing the compiler or a casual
+  test sees. And write `ShouldBe`'s arguments from what the call site is
+  *meant* to say, not from what it renders.
+- **The test-support project is for test projects.** No product project —
+  no Razor member, no host, no WebAssembly client — may reference it: it
+  carries bunit. A project that declares the browser platform fails to build
+  with `CA1416` if it uses it, and the umbrella's `check-members.sh` gates the
+  rest (Architecture, The test-support project).
+- **A consumer's bUnit test that names `localStorage`, `sessionStorage`,
+  `getItem`, `setItem` or `removeItem` is a defect — use
+  `BrowserStoragePlan`.** That includes a `JSInterop.Setup` or `SetupVoid` for
+  one of them, and a read of `JSInterop.Invocations` by one of them. Each
+  restates this library's interop where a change here cannot reach it. A
+  handler that answers a storage call in the plan's place also fails `Verify`.
+  The store's own key is not the library's, and is fine.
+  ExtractFromXgToCsv's `MemoryBrowserStorage`, a fake `IJSRuntime`, still spells
+  them, for the simulated storage the plan deliberately is not.
 - **Call `Verify`.** An unexpected call fails where it is made, but code under
   test may swallow that failure, and a call that was never made fails
   nowhere else. A test that plans storage ends with `Verify`.
@@ -1358,16 +1136,38 @@ settled, including a restoration that rejected a stale result.)
   observation only that continuation produces. A render showing the expected
   state is not that evidence. The state may hold before the continuation
   runs. And a stale completion that is rightly rejected renders nothing.
-  `WaitForAssertion` re-checks only after a render, so it either passes
-  before that continuation has run or waits for a render that never comes.
+  `WaitForAssertion` and `WaitForState` check once at the start and then only
+  after each render (bUnit's
+  `src/bunit/Extensions/WaitForHelpers/WaitForHelper.cs` at tag `v2.8.6`), so
+  they either pass before that continuation has run or wait for a render that
+  never comes.
+
+### Changing this library
+
+- **Changing what `Notice` renders** means changing `NoticeBox` and the
+  literal boxes in `NoticeBoxTests` in the same commit. A consumer that reads
+  through `NoticeBox` changes nothing; one that does not (Consumer tests, above)
+  changes with it. A new structural rule in `NoticeBox` needs its failing case
+  there too: an assertion never seen failing is unproven.
+- **Changing how `BrowserStorage` reaches the browser** — a JavaScript
+  module, another argument order, an extra call — means changing
+  `BrowserStoragePlan`'s restated wire and `BrowserStorageTests`' literals in
+  the same commit. `BrowserStoragePlanTests` fails until the plan agrees with
+  the accessor. No consumer on the plan changes; `MemoryBrowserStorage` does.
+- **Editing `Notice.razor.css`.** Its selectors are half of the
+  inner-content rule and no bUnit test can execute them. After any change,
+  check in a real browser that a click on plain text targets the box and a
+  click on an inner link or button targets that element.
+- **Adding a `NoticeKind` or `NoticeAnnouncement` value** means adding its arm
+  to the component's switch — an enum value without one throws at render —
+  and its reading to `NoticeBox`, without which
+  `NoticeBoxTests.EveryDeclaredKind_AndAnnouncement_IsReadBackFromTheRealComponent`
+  fails.
+- **Do not put the role on the box, or the close button in the wrapper.**
+  Either puts the button's accessible name inside an atomic live region, so
+  every dismissible notice would read "Dismiss this message, button" after its
+  text.
+- **Do not add a handler to the close button.** Its click already reaches the
+  box's handler; a second one reports a caller-held dismissal twice.
 - **Adding a primitive.** It goes in the root namespace, takes user-level
-  selectors, and knows nothing of any domain. If it needs a member's type, it
-  belongs in that member.
-
-## Subproject-internal next steps
-
-None open. Adoption of `Notice` by `XgFilter_Razor`, `ExtractFromXgToCsv` and
-`BgQuiz_Blazor` — and with it the replacement of the first two's own notice
-test helpers by `NoticeBox` — is tracked in the umbrella
-(halheinrich/backgammon#248). Adoption of `BrowserStorage` by the same three
-members is tracked there too (halheinrich/backgammon#374).
+  selectors, and knows nothing of any domain (Depends on).
