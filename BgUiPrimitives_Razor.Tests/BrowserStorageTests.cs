@@ -237,10 +237,12 @@ public class BrowserStorageTests : BunitContext
 
     // ---- Only the browser's refusal is caught --------------------------------
 
-    // What static rendering's JS runtime throws for any interop call: an
-    // InvalidOperationException, not a JSException (measured against the
-    // .NET 10 runtime when this type was introduced). Not an answer from the
-    // browser, so not a refusal.
+    // Static rendering's JS runtime throws InvalidOperationException for any
+    // interop call: a runtime observation, recorded in commit 6efaa9c's
+    // message, the probe itself not kept. This theory establishes nothing
+    // about the runtime. It injects the exception through the plan and pins
+    // that the same instance comes back, for every operation in every area:
+    // not an answer from the browser, so not a refusal.
     [Theory]
     [MemberData(nameof(EveryOperationInEveryArea))]
     public async Task AnInvalidOperation_Propagates_Unchanged(Operation operation, BrowserStorageArea area)

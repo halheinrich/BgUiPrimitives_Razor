@@ -9,9 +9,9 @@ namespace BgUiPrimitives_Razor.TestSupport;
 /// The browser storage a test plans, in <see cref="BrowserStorage"/>'s own
 /// vocabulary: which reads, writes and removals the code under test makes —
 /// area, key, and for a write the value — how the browser answers each, and
-/// afterwards whether the calls made were exactly those. The one place
-/// outside the library that knows how <see cref="BrowserStorage"/> reaches
-/// the browser, so that no consumer test names an interop identifier.
+/// afterwards whether the calls made were exactly those. The planner this
+/// library ships for a consumer's bUnit test, so that the test need name no
+/// interop identifier.
 /// </summary>
 /// <remarks>
 /// <para>

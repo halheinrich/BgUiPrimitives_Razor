@@ -15,9 +15,10 @@ namespace BgUiPrimitives_Razor.Tests;
 public class TestSupportPostureTests
 {
     // Unsupported on "browser": in any project that declares the browser
-    // platform — BgQuiz's WebAssembly client and every Razor member do — the
-    // platform-compatibility analyzer reports a use of this assembly as
-    // CA1416, which the house TreatWarningsAsErrors makes a build error.
+    // platform — each Razor member in its project file, each WebAssembly
+    // client through its SDK — the platform-compatibility analyzer reports a
+    // use of this assembly as CA1416, which the house TreatWarningsAsErrors
+    // makes a build error.
     //
     // Stated limit: this pins the declaration, not the analyzer's verdict,
     // which belongs to the referencing project's build (measured once, in a

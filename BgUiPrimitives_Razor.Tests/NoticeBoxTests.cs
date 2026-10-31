@@ -20,7 +20,7 @@ namespace BgUiPrimitives_Razor.Tests;
 // and expects NoticeAssertionException.
 public class NoticeBoxTests : BunitContext
 {
-    // The three shapes, as INSTRUCTIONS.md (Public API, Rendered shape) gives
+    // The three shapes, as INSTRUCTIONS.md (Using the library, A notice) gives
     // them, with what the renderers stamp: the scope attribute, and the test
     // renderer's handler markers.
     private const string NotDismissible = """
@@ -460,12 +460,12 @@ public class NoticeBoxTests : BunitContext
         Assert.Contains(expected, ex.Message);
     }
 
-    // The silent-splat trap, reproduced through the real component exactly as
-    // it was measured in two adopters: the parameter's name is misspelt on the
-    // call site, so it is no parameter at all. Nothing throws and nothing
-    // warns; the value lands on the box as a plain attribute and the notice is
-    // polite. The test says what the call site meant, and both halves of the
-    // slip are reported.
+    // The silent-splat trap, reproduced through the real component: the name
+    // on the call site is no parameter at all (misspelt here; renamed under
+    // the call site in the case XgFilter_Razor 2f46cca records). Nothing
+    // throws and nothing warns; the value lands on the box as a plain
+    // attribute and the notice is polite. The test says what the call site
+    // meant, and both halves of the slip are reported.
     [Fact]
     public void ShouldBe_Fails_OnAMisspeltParameter_SplattedOntoTheBox()
     {

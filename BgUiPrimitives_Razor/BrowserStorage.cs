@@ -35,10 +35,11 @@ namespace BgUiPrimitives_Razor;
 /// failure is never mistaken for a storage failure.
 /// </para>
 /// <para>
-/// <b>What it does not own.</b> Whether storage "is unavailable" for the app,
-/// how and when a refusal is reported to the user, and that report's
-/// dismissal belong to the host. A refused result is the host's evidence; this
-/// type keeps no record of it.
+/// <b>What it does not own.</b> Whether the browser has refused a call this
+/// visit, and the dismissal of the notice that says so, belong to
+/// <see cref="BrowserStorageCondition"/>, fed by
+/// <see cref="ReportingBrowserStorage"/>; what the user is told, and where,
+/// belongs to each host. This type keeps no record of a refusal.
 /// </para>
 /// <para>
 /// <b>Registration.</b> A host calls

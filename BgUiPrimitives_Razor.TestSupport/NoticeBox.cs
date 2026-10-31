@@ -7,10 +7,9 @@ namespace BgUiPrimitives_Razor.TestSupport;
 /// <summary>
 /// One rendered <see cref="Notice"/>, read back into the component's own
 /// vocabulary: its <see cref="Kind"/>, its <see cref="Announcement"/>, whether
-/// it is <see cref="Dismissible"/>, and what the call site put on it. The one
-/// place outside the component that knows what a notice looks like in markup,
-/// so that no consumer test names a class, a role or a selector of the
-/// component's.
+/// it is <see cref="Dismissible"/>, and what the call site put on it. The
+/// reader this library ships for a consumer's bUnit test, so that the test
+/// need name no class, role or selector of the component's.
 /// </summary>
 /// <remarks>
 /// <para>

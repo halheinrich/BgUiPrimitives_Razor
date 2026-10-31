@@ -27,9 +27,9 @@ public enum NoticeAnnouncement
     /// <summary>
     /// The notice sits inside a live region the caller keeps mounted, and
     /// that region announces it. The notice renders no live-region role of its
-    /// own: one live region nested in another is announced twice by some
-    /// screen readers. How insistently it is announced is the enclosing
-    /// region's to say.
+    /// own, so that no live region is nested in another; that nesting risks a
+    /// double announcement is an assumption, not tested with a screen reader.
+    /// How insistently it is announced is the enclosing region's to say.
     /// </summary>
     ByEnclosingRegion,
 }
