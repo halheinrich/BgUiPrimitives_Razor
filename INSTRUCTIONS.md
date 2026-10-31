@@ -690,11 +690,13 @@ to say:
 
 A notice inside a live region the caller keeps mounted — the region is
 rendered unconditionally and only its content swaps, because a live region
-that first appears in the very render that fills it may not be announced. That
-rests on one observation of one box (halheinrich/backgammon#171), not on a
-screen-reader test, and a self-announcing notice rendered under a condition is
-just such a region (halheinrich/backgammon#249). The region announces; the
-notice adds none of its own:
+that first appears in the very render that fills it may not be announced.
+Keeping the region mounted follows the rationale recorded in XgFilter_Razor
+997ad08. Its screen-reader behaviour has not been measured here;
+halheinrich/backgammon#249 tracks verification. A self-announcing notice
+rendered under a condition is a region that first appears in the render that
+fills it (halheinrich/backgammon#249). The region announces; the notice adds
+none of its own:
 
 ```razor
 <div id="loadedNotice" role="status">
